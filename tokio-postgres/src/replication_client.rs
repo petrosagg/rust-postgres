@@ -123,6 +123,8 @@
 
 use crate::client::Responses;
 use crate::codec::FrontendMessage;
+use crate::copy_out::CopyOutStream;
+use crate::copy_out;
 use crate::connection::RequestMessages;
 use crate::types::Type;
 use crate::{simple_query, Client, Error, SimpleQueryStream, SimpleQueryMessage};
@@ -678,6 +680,11 @@ impl ReplicationClient {
 
     pub(crate) async fn simple_query_raw(&self, query: &str) -> Result<SimpleQueryStream, Error> {
         simple_query::simple_query(self.client.inner(), query).await
+    }
+
+    /// Executes a `COPY TO STDOUT` statement, returning a stream of the resulting data.
+    pub async fn copy_out(&self, query: &str) -> Result<CopyOutStream, Error> {
+        copy_out::copy_out_simple(self.client.inner(), query).await
     }
 
     // Private methods
