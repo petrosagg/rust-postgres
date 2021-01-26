@@ -125,10 +125,10 @@ use crate::client::Responses;
 use crate::codec::FrontendMessage;
 use crate::connection::RequestMessages;
 use crate::types::Type;
-use crate::{simple_query, Client, Error};
+use crate::{simple_query, Client, Error, SimpleQueryStream, SimpleQueryMessage};
 use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
-use futures::{ready, Stream};
+use futures::{ready, Stream, TryStreamExt};
 use pin_project::{pin_project, pinned_drop};
 use postgres_types::PgLsn;
 use postgres_protocol::escape::{escape_identifier, escape_literal};
@@ -663,6 +663,21 @@ impl ReplicationClient {
         );
         let _ = iclient.send(RequestMessages::Single(FrontendMessage::Raw(buf.freeze())))?;
         Ok(())
+    }
+
+    /// Executes a sequence of SQL statements using the simple query protocol, returning the resulting rows.
+    ///
+    /// Statements should be separated by semicolons. If an error occurs, execution of the sequence will stop at that
+    /// point. The simple query protocol returns the values in rows as strings rather than in their binary encodings,
+    /// so the associated row type doesn't work with the `FromSql` trait. Rather than simply returning a list of the
+    /// rows, this method returns a list of an enum which indicates either the completion of one of the commands,
+    /// or a row of data. This preserves the framing between the separate statements in the request.
+    pub async fn simple_query(&self, query: &str) -> Result<Vec<SimpleQueryMessage>, Error> {
+        self.simple_query_raw(query).await?.try_collect().await
+    }
+
+    pub(crate) async fn simple_query_raw(&self, query: &str) -> Result<SimpleQueryStream, Error> {
+        simple_query::simple_query(self.client.inner(), query).await
     }
 
     // Private methods
