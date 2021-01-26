@@ -124,12 +124,13 @@
 use crate::client::Responses;
 use crate::codec::FrontendMessage;
 use crate::connection::RequestMessages;
-use crate::types::{Lsn, Type};
+use crate::types::Type;
 use crate::{simple_query, Client, Error};
 use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use futures::{ready, Stream};
 use pin_project::{pin_project, pinned_drop};
+use postgres_types::PgLsn;
 use postgres_protocol::escape::{escape_identifier, escape_literal};
 use postgres_protocol::message::backend::{Message, ReplicationMessage, RowDescriptionBody};
 use postgres_protocol::message::frontend;
@@ -145,7 +146,7 @@ use std::task::{Context, Poll};
 pub struct IdentifySystem {
     systemid: String,
     timeline: u32,
-    xlogpos: Lsn,
+    xlogpos: PgLsn,
     dbname: Option<String>,
 }
 
@@ -165,7 +166,7 @@ impl IdentifySystem {
 
     /// Current WAL flush location. Useful to get a known location in
     /// the write-ahead log where streaming can start.
-    pub fn xlogpos(&self) -> Lsn {
+    pub fn xlogpos(&self) -> PgLsn {
         self.xlogpos
     }
 
@@ -219,7 +220,7 @@ pub enum SnapshotMode {
 #[derive(Debug)]
 pub struct CreateReplicationSlotResponse {
     slot_name: String,
-    consistent_point: Lsn,
+    consistent_point: PgLsn,
     snapshot_name: Option<String>,
     output_plugin: Option<String>,
 }
@@ -233,7 +234,7 @@ impl CreateReplicationSlotResponse {
     /// The WAL location at which the slot became consistent. This is
     /// the earliest location from which streaming can start on this
     /// replication slot.
-    pub fn consistent_point(&self) -> Lsn {
+    pub fn consistent_point(&self) -> PgLsn {
         self.consistent_point
     }
 
@@ -257,7 +258,7 @@ impl CreateReplicationSlotResponse {
 #[derive(Clone, Debug)]
 pub struct ReplicationResponse {
     next_tli: u64,
-    next_tli_startpos: Lsn,
+    next_tli_startpos: PgLsn,
 }
 
 impl ReplicationResponse {
@@ -267,7 +268,7 @@ impl ReplicationResponse {
     }
 
     /// WAL location where the switch happened
-    pub fn next_tli_startpos(&self) -> Lsn {
+    pub fn next_tli_startpos(&self) -> PgLsn {
         self.next_tli_startpos
     }
 }
@@ -313,7 +314,7 @@ impl ReplicationClient {
         Ok(IdentifySystem {
             systemid: values[0].unwrap().to_string(),
             timeline: values[1].unwrap().parse::<u32>().unwrap(),
-            xlogpos: Lsn::from(values[2].unwrap()),
+            xlogpos: values[2].unwrap().parse::<PgLsn>().unwrap(),
             dbname: values[3].map(String::from),
         })
     }
@@ -468,7 +469,7 @@ impl ReplicationClient {
 
         Ok(CreateReplicationSlotResponse {
             slot_name: values[0].unwrap().to_string(),
-            consistent_point: Lsn::from(values[1].unwrap()),
+            consistent_point: values[1].unwrap().parse::<PgLsn>().unwrap(),
             snapshot_name: values[2].map(String::from),
             output_plugin: values[3].map(String::from),
         })
@@ -539,7 +540,7 @@ impl ReplicationClient {
 
         Ok(CreateReplicationSlotResponse {
             slot_name: values[0].unwrap().to_string(),
-            consistent_point: Lsn::from(values[1].unwrap()),
+            consistent_point: values[1].unwrap().parse::<PgLsn>().unwrap(),
             snapshot_name: values[2].map(String::from),
             output_plugin: values[3].map(String::from),
         })
@@ -579,7 +580,7 @@ impl ReplicationClient {
     pub async fn start_physical_replication<'a>(
         &'a mut self,
         slot_name: Option<&str>,
-        lsn: Lsn,
+        lsn: PgLsn,
         timeline_id: Option<u32>,
     ) -> Result<Pin<Box<ReplicationStream<'a>>>, Error> {
         let slot = match slot_name {
@@ -593,7 +594,7 @@ impl ReplicationClient {
         let command = format!(
             "START_REPLICATION{} PHYSICAL {}{}",
             slot,
-            String::from(lsn),
+            lsn.to_string(),
             timeline
         );
 
@@ -614,7 +615,7 @@ impl ReplicationClient {
     pub async fn start_logical_replication<'a>(
         &'a mut self,
         slot_name: &str,
-        lsn: Lsn,
+        lsn: PgLsn,
         options: &[(&str, &str)],
     ) -> Result<Pin<Box<ReplicationStream<'a>>>, Error> {
         let slot = format!(" SLOT {}", escape_identifier(slot_name));
@@ -634,7 +635,7 @@ impl ReplicationClient {
         let command = format!(
             "START_REPLICATION{} LOGICAL {}{}",
             slot,
-            String::from(lsn),
+            lsn.to_string(),
             options_string
         );
 
@@ -644,9 +645,9 @@ impl ReplicationClient {
     /// Send update to server.
     pub async fn standby_status_update(
         &mut self,
-        write_lsn: Lsn,
-        flush_lsn: Lsn,
-        apply_lsn: Lsn,
+        write_lsn: PgLsn,
+        flush_lsn: PgLsn,
+        apply_lsn: PgLsn,
         ts: i64,
         reply: u8,
     ) -> Result<(), Error> {
@@ -874,7 +875,7 @@ async fn recv_replication_response(
             let switch = &datarow.buffer()[ranges[1].to_owned().unwrap()];
             Ok(ReplicationResponse {
                 next_tli: from_utf8(timeline).unwrap().parse::<u64>().unwrap(),
-                next_tli_startpos: Lsn::from(from_utf8(switch).unwrap()),
+                next_tli_startpos: from_utf8(switch).unwrap().parse::<PgLsn>().unwrap(),
             })
         }
         _ => Err(Error::unexpected_message()),
