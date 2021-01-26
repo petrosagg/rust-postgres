@@ -644,29 +644,6 @@ impl ReplicationClient {
         Ok(self.start_replication(command).await?)
     }
 
-    /// Send update to server.
-    pub async fn standby_status_update(
-        &mut self,
-        write_lsn: PgLsn,
-        flush_lsn: PgLsn,
-        apply_lsn: PgLsn,
-        ts: i64,
-        reply: u8,
-    ) -> Result<(), Error> {
-        let iclient = self.client.inner();
-        let mut buf = BytesMut::new();
-        let _ = frontend::standby_status_update(
-            write_lsn.into(),
-            flush_lsn.into(),
-            apply_lsn.into(),
-            ts as i64,
-            reply,
-            &mut buf,
-        );
-        let _ = iclient.send(RequestMessages::Single(FrontendMessage::Raw(buf.freeze())))?;
-        Ok(())
-    }
-
     /// Executes a sequence of SQL statements using the simple query protocol, returning the resulting rows.
     ///
     /// Statements should be separated by semicolons. If an error occurs, execution of the sequence will stop at that
@@ -786,7 +763,53 @@ pub struct ReplicationStream<'a> {
     _phantom_pinned: PhantomPinned,
 }
 
-impl ReplicationStream<'_> {
+impl<'a> ReplicationStream<'a> {
+    /// Send standby update to server.
+    pub async fn standby_status_update(
+        self: Pin<&mut Self>,
+        write_lsn: PgLsn,
+        flush_lsn: PgLsn,
+        apply_lsn: PgLsn,
+        ts: i64,
+        reply: u8,
+    ) -> Result<(), Error> {
+        let iclient = self.rclient.client.inner();
+        let mut buf = BytesMut::new();
+        let _ = frontend::standby_status_update(
+            write_lsn.into(),
+            flush_lsn.into(),
+            apply_lsn.into(),
+            ts as i64,
+            reply,
+            &mut buf,
+        );
+        let _ = iclient.send(RequestMessages::Single(FrontendMessage::Raw(buf.freeze())))?;
+        Ok(())
+    }
+
+    /// Send hot standby feedback message to server.
+    pub async fn hot_standby_feedback(
+        self: Pin<&mut Self>,
+        timestamp: i64,
+        global_xmin: u32,
+        global_xmin_epoch: u32,
+        catalog_xmin: u32,
+        catalog_xmin_epoch: u32,
+    ) -> Result<(), Error> {
+        let iclient = self.rclient.client.inner();
+        let mut buf = BytesMut::new();
+        let _ = frontend::hot_standby_feedback(
+            timestamp,
+            global_xmin,
+            global_xmin_epoch,
+            catalog_xmin,
+            catalog_xmin_epoch,
+            &mut buf,
+        );
+        let _ = iclient.send(RequestMessages::Single(FrontendMessage::Raw(buf.freeze())))?;
+        Ok(())
+    }
+
     /// Stop replication stream and return the replication client object.
     pub async fn stop_replication(
         mut self: Pin<Box<Self>>,
