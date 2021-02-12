@@ -1,7 +1,8 @@
 #![allow(missing_docs)]
 
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
-use bytes::{Bytes, BytesMut};
+use bytes::buf::Reader as BufReader;
+use bytes::{Buf, Bytes, BytesMut};
 use fallible_iterator::FallibleIterator;
 use memchr::memchr;
 use std::cmp;
@@ -38,6 +39,20 @@ pub const READY_FOR_QUERY_TAG: u8 = b'Z';
 // replication message tags
 pub const XLOG_DATA_TAG: u8 = b'w';
 pub const PRIMARY_KEEPALIVE_TAG: u8 = b'k';
+
+pub trait Parse: Sized {
+    fn parse(buf: &Bytes) -> io::Result<Self> {
+        Self::parse_reader(&mut buf.clone().reader())
+    }
+
+    fn parse_reader(buf: &mut BufReader<Bytes>) -> io::Result<Self>;
+}
+
+impl Parse for Bytes {
+    fn parse_reader(buf: &mut BufReader<Bytes>) -> io::Result<Self> {
+        Ok(buf.get_ref().clone())
+    }
+}
 
 #[derive(Debug, Copy, Clone)]
 pub struct Header {
@@ -297,18 +312,13 @@ impl Message {
 
 /// An enum representing Postgres backend replication messages.
 #[non_exhaustive]
-pub enum ReplicationMessage {
-    XLogData(XLogDataBody),
+pub enum ReplicationMessage<D> {
+    XLogData(XLogDataBody<D>),
     PrimaryKeepAlive(PrimaryKeepAliveBody),
 }
 
-impl ReplicationMessage {
-    pub fn parse(bytes: &Bytes) -> io::Result<ReplicationMessage> {
-        let mut buf = Buffer {
-            bytes: bytes.clone(),
-            idx: 0,
-        };
-
+impl<D: Parse> Parse for ReplicationMessage<D> {
+    fn parse_reader(buf: &mut BufReader<Bytes>) -> io::Result<Self> {
         let tag = buf.read_u8()?;
 
         let replication_message = match tag {
@@ -316,12 +326,12 @@ impl ReplicationMessage {
                 let wal_start = buf.read_u64::<BigEndian>()?;
                 let wal_end = buf.read_u64::<BigEndian>()?;
                 let timestamp = buf.read_i64::<BigEndian>()?;
-                let storage = buf.read_all();
+                let data = D::parse(&buf.get_mut().clone())?;
                 ReplicationMessage::XLogData(XLogDataBody {
                     wal_start,
                     wal_end,
                     timestamp,
-                    storage,
+                    data,
                 })
             }
             PRIMARY_KEEPALIVE_TAG => {
@@ -865,14 +875,14 @@ impl RowDescriptionBody {
     }
 }
 
-pub struct XLogDataBody {
+pub struct XLogDataBody<D> {
     wal_start: u64,
     wal_end: u64,
     timestamp: i64,
-    storage: Bytes,
+    data: D,
 }
 
-impl XLogDataBody {
+impl<D> XLogDataBody<D> {
     #[inline]
     pub fn wal_start(&self) -> u64 {
         self.wal_start
@@ -889,13 +899,13 @@ impl XLogDataBody {
     }
 
     #[inline]
-    pub fn data(&self) -> &[u8] {
-        &self.storage
+    pub fn data(&self) -> &D {
+        &self.data
     }
 
     #[inline]
-    pub fn into_bytes(self) -> Bytes {
-        self.storage
+    pub fn into_data(self) -> D {
+        self.data
     }
 }
 

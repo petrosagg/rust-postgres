@@ -128,16 +128,20 @@ use crate::copy_out;
 use crate::connection::RequestMessages;
 use crate::types::Type;
 use crate::{simple_query, Client, Error, SimpleQueryStream, SimpleQueryMessage};
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use fallible_iterator::FallibleIterator;
 use futures::{ready, Stream, TryStreamExt};
 use pin_project::{pin_project, pinned_drop};
 use postgres_types::PgLsn;
 use postgres_protocol::escape::{escape_identifier, escape_literal};
-use postgres_protocol::message::backend::{Message, ReplicationMessage, RowDescriptionBody};
+use postgres_protocol::message::backend::{
+    Message, Parse, ReplicationMessage, RowDescriptionBody,
+};
 use postgres_protocol::message::frontend;
+use postgres_protocol::replication::DecodingPlugin;
+
 use std::io;
-use std::marker::PhantomPinned;
+use std::marker::{PhantomData, PhantomPinned};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::from_utf8;
@@ -495,11 +499,11 @@ impl ReplicationClient {
     ///   Plugins](https://www.postgresql.org/docs/current/logicaldecoding-output-plugin.html)).
     /// * `snapshot_mode`: Decides what to do with the snapshot
     ///   created during logical slot initialization.
-    pub async fn create_logical_replication_slot(
+    pub async fn create_logical_replication_slot<P: DecodingPlugin>(
         &mut self,
         slot_name: &str,
         temporary: bool,
-        plugin_name: &str,
+        plugin: &P,
         snapshot_mode: Option<SnapshotMode>,
     ) -> Result<CreateReplicationSlotResponse, Error> {
         let temporary_str = if temporary { " TEMPORARY" } else { "" };
@@ -512,7 +516,7 @@ impl ReplicationClient {
             "CREATE_REPLICATION_SLOT {}{} LOGICAL {}{}",
             escape_identifier(slot_name),
             temporary_str,
-            escape_identifier(plugin_name),
+            escape_identifier(plugin.name()),
             snapshot_str
         );
         let mut responses = self.send(&command).await?;
@@ -584,7 +588,7 @@ impl ReplicationClient {
         slot_name: Option<&str>,
         lsn: PgLsn,
         timeline_id: Option<u32>,
-    ) -> Result<Pin<Box<ReplicationStream<'a>>>, Error> {
+    ) -> Result<Pin<Box<ReplicationStream<'a, Bytes>>>, Error> {
         let slot = match slot_name {
             Some(name) => format!(" SLOT {}", escape_identifier(name)),
             None => String::from(""),
@@ -614,13 +618,14 @@ impl ReplicationClient {
     /// * `lsn`: The starting WAL location.
     /// * `options`: (name, value) pairs of options passed to the
     ///   slot's logical decoding plugin.
-    pub async fn start_logical_replication<'a>(
+    pub async fn start_logical_replication<'a, P: DecodingPlugin>(
         &'a mut self,
         slot_name: &str,
         lsn: PgLsn,
-        options: &[(&str, &str)],
-    ) -> Result<Pin<Box<ReplicationStream<'a>>>, Error> {
+        plugin: &P,
+    ) -> Result<Pin<Box<ReplicationStream<'a, P::Message>>>, Error> {
         let slot = format!(" SLOT {}", escape_identifier(slot_name));
+        let options = plugin.options();
         let options_string = if !options.is_empty() {
             format!(
                 " ({})",
@@ -678,10 +683,10 @@ impl ReplicationClient {
         Ok(responses)
     }
 
-    async fn start_replication<'a>(
+    async fn start_replication<'a, D>(
         &'a mut self,
         command: String,
-    ) -> Result<Pin<Box<ReplicationStream<'a>>>, Error> {
+    ) -> Result<Pin<Box<ReplicationStream<'a, D>>>, Error> {
         let mut copyboth_received = false;
         let mut replication_response: Option<ReplicationResponse> = None;
         let mut responses = self.send(&command).await?;
@@ -717,6 +722,7 @@ impl ReplicationClient {
             copydone_sent: false,
             copydone_received: false,
             replication_response: replication_response,
+            _phantom_data: PhantomData,
             _phantom_pinned: PhantomPinned,
         }))
     }
@@ -752,18 +758,19 @@ impl ReplicationClient {
 /// [stop_replication()](ReplicationStream::stop_replication()) will
 /// return a response tuple.
 #[pin_project(PinnedDrop)]
-pub struct ReplicationStream<'a> {
+pub struct ReplicationStream<'a, D> {
     rclient: &'a mut ReplicationClient,
     responses: Responses,
     copyboth_received: bool,
     copydone_sent: bool,
     copydone_received: bool,
     replication_response: Option<ReplicationResponse>,
+    _phantom_data: PhantomData<D>,
     #[pin]
     _phantom_pinned: PhantomPinned,
 }
 
-impl<'a> ReplicationStream<'a> {
+impl<'a, D> ReplicationStream<'a, D> {
     /// Send standby update to server.
     pub async fn standby_status_update(
         self: Pin<&mut Self>,
@@ -855,8 +862,8 @@ impl<'a> ReplicationStream<'a> {
     }
 }
 
-impl Stream for ReplicationStream<'_> {
-    type Item = Result<ReplicationMessage, Error>;
+impl<D: Parse> Stream for ReplicationStream<'_, D> {
+    type Item = Result<ReplicationMessage<D>, Error>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
@@ -872,7 +879,7 @@ impl Stream for ReplicationStream<'_> {
         assert!(!*this.copydone_received);
         match ready!(this.responses.poll_next(cx)?) {
             Message::CopyData(body) => {
-                let r = ReplicationMessage::parse(&body.into_bytes());
+                let r = ReplicationMessage::parse(&mut body.into_bytes());
                 Poll::Ready(Some(r.map_err(Error::parse)))
             }
             Message::CopyDone => {
@@ -887,7 +894,7 @@ impl Stream for ReplicationStream<'_> {
 }
 
 #[pinned_drop]
-impl PinnedDrop for ReplicationStream<'_> {
+impl<D> PinnedDrop for ReplicationStream<'_, D> {
     fn drop(mut self: Pin<&mut Self>) {
         let this = self.project();
         if *this.copyboth_received && !*this.copydone_sent {

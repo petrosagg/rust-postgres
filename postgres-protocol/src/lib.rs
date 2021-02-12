@@ -20,6 +20,7 @@ pub mod authentication;
 pub mod escape;
 pub mod message;
 pub mod password;
+pub mod replication;
 pub mod types;
 
 /// A Postgres OID.
