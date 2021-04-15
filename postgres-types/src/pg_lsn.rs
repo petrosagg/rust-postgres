@@ -13,6 +13,12 @@ use crate::{FromSql, IsNull, ToSql, Type};
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub struct PgLsn(u64);
 
+impl PgLsn {
+    /// An un-specified or unknown LSN
+    // The C equivalent is InvalidXLogRecPtr
+    pub const INVALID: PgLsn = PgLsn(0);
+}
+
 /// Error parsing LSN.
 #[derive(Debug)]
 pub struct ParseLsnError(());
