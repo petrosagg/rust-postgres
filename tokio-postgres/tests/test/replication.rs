@@ -1,11 +1,10 @@
 use futures::StreamExt;
-use std::time::{Duration, UNIX_EPOCH};
 
 use postgres_protocol::message::backend::LogicalReplicationMessage::{Begin, Commit, Insert};
 use postgres_protocol::message::backend::ReplicationMessage::*;
 use postgres_protocol::message::backend::TupleData;
 use postgres_types::PgLsn;
-use tokio_postgres::replication::LogicalReplicationStream;
+use tokio_postgres::replication::{LogicalReplicationStream, PgTimestamp};
 use tokio_postgres::NoTls;
 use tokio_postgres::SimpleQueryMessage::Row;
 
@@ -130,10 +129,8 @@ async fn test_replication() {
 
     // Send a standby status update and require a keep alive response
     let lsn: PgLsn = lsn.parse().unwrap();
+    let ts = PgTimestamp::now().unwrap();
 
-    // Postgres epoch is 2000-01-01T00:00:00Z
-    let pg_epoch = UNIX_EPOCH + Duration::from_secs(946_684_800);
-    let ts = pg_epoch.elapsed().unwrap().as_micros() as i64;
     stream
         .as_mut()
         .standby_status_update(lsn, lsn, lsn, ts, 1)

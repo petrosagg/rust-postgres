@@ -14,6 +14,46 @@ use std::task::{Context, Poll};
 const STANDBY_STATUS_UPDATE_TAG: u8 = b'r';
 const HOT_STANDBY_FEEDBACK_TAG: u8 = b'h';
 
+// FIXME: move this somewhere in the postgres-types crate
+// FIXME: this is confusingly similar to postgres_types::Timestamp
+use std::convert::{TryFrom, TryInto};
+use std::time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH};
+
+/// A moment in time, relative to the postgres epoch 2000-01-01T00:00:00Z
+#[derive(Copy, Clone, Debug)]
+pub struct PgTimestamp(pub(crate) i64);
+
+impl TryFrom<SystemTime> for PgTimestamp {
+    type Error = SystemTimeError;
+
+    /// Attempt to create a `PgTimestamp` from the given `SystemTime`.
+    ///
+    /// This will fail if the input time is earlier than the Postgres
+    /// epoch (2000-01-01).
+    ///
+    /// This will panic if the timestamp won't fit in an `i64`.
+    fn try_from(t: SystemTime) -> Result<Self, Self::Error> {
+        // Postgres epoch is 2000-01-01T00:00:00Z
+        // Maybe in the future this can be const?
+        let pg_epoch = UNIX_EPOCH + Duration::from_secs(946_684_800);
+        let delta = t.duration_since(pg_epoch)?;
+        let micros: i64 = delta.as_micros().try_into().expect("timestamp overflow");
+        Ok(PgTimestamp(micros))
+    }
+}
+
+impl PgTimestamp {
+    /// The current time, represented as a `PgTimestamp`
+    ///
+    /// This will fail if the system time is earlier than the Postgres
+    /// epoch (2000-01-01).
+    ///
+    /// This will panic if the timestamp won't fit in an `i64`.
+    pub fn now() -> Result<Self, SystemTimeError> {
+        Self::try_from(SystemTime::now())
+    }
+}
+
 pin_project! {
     /// A type which deserializes the postgres replication protocol. This type can be used with
     /// both physical and logical replication to get access to the byte content of each replication
@@ -38,7 +78,7 @@ impl ReplicationStream {
         write_lsn: PgLsn,
         flush_lsn: PgLsn,
         apply_lsn: PgLsn,
-        ts: i64,
+        ts: PgTimestamp,
         reply: u8,
     ) -> Result<(), Error> {
         let mut this = self.project();
@@ -48,7 +88,7 @@ impl ReplicationStream {
         buf.put_u64(write_lsn.into());
         buf.put_u64(flush_lsn.into());
         buf.put_u64(apply_lsn.into());
-        buf.put_i64(ts);
+        buf.put_i64(ts.0);
         buf.put_u8(reply);
 
         this.stream.send(buf.freeze()).await
@@ -118,7 +158,7 @@ impl LogicalReplicationStream {
         write_lsn: PgLsn,
         flush_lsn: PgLsn,
         apply_lsn: PgLsn,
-        ts: i64,
+        ts: PgTimestamp,
         reply: u8,
     ) -> Result<(), Error> {
         let this = self.project();
