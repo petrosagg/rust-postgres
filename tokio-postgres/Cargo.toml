@@ -1,6 +1,6 @@
 [package]
 name = "tokio-postgres"
-version = "0.7.5"
+version = "0.7.6"
 authors = ["Steven Fackler <sfackler@gmail.com>"]
 edition = "2018"
 license = "MIT/Apache-2.0"
@@ -36,6 +36,7 @@ with-geo-types-0_6 = ["postgres-types/with-geo-types-0_6"]
 with-geo-types-0_7 = ["postgres-types/with-geo-types-0_7"]
 with-serde_json-1 = ["postgres-types/with-serde_json-1"]
 with-uuid-0_8 = ["postgres-types/with-uuid-0_8"]
+with-uuid-1 = ["postgres-types/with-uuid-1"]
 with-time-0_2 = ["postgres-types/with-time-0_2"]
 with-time-0_3 = ["postgres-types/with-time-0_3"]
 
@@ -50,8 +51,8 @@ parking_lot = "0.12"
 percent-encoding = "2.0"
 pin-project-lite = "0.2"
 phf = "0.10"
-postgres-protocol = { version = "0.6.1", path = "../postgres-protocol" }
-postgres-types = { version = "0.2.2", path = "../postgres-types" }
+postgres-protocol = { version = "0.6.4", path = "../postgres-protocol" }
+postgres-types = { version = "0.2.3", path = "../postgres-types" }
 socket2 = "0.4"
 tokio = { version = "1.0", features = ["io-util"] }
 tokio-util = { version = "0.7", features = ["codec"] }
@@ -70,5 +71,6 @@ geo-types-07 = { version = "0.7", package = "geo-types" }
 serde-1 = { version = "1.0", package = "serde" }
 serde_json-1 = { version = "1.0", package = "serde_json" }
 uuid-08 = { version = "0.8", package = "uuid" }
+uuid-1 = { version = "1.0", package = "uuid" }
 time-02 = { version = "0.2", package = "time" }
 time-03 = { version = "0.3", package = "time", features = ["parsing"] }
