@@ -41,7 +41,8 @@ pub enum TargetSessionAttrs {
 }
 
 /// TLS configuration.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum SslMode {
     /// Do not use TLS.
