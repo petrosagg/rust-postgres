@@ -223,10 +223,10 @@ pub struct Config {
     pub(crate) dbname: Option<String>,
     pub(crate) options: Option<String>,
     pub(crate) application_name: Option<String>,
-    pub(crate) ssl_cert: Option<PathBuf>,
-    pub(crate) ssl_key: Option<PathBuf>,
+    pub(crate) ssl_cert: Option<Vec<u8>>,
+    pub(crate) ssl_key: Option<Vec<u8>>,
     pub(crate) ssl_mode: SslMode,
-    pub(crate) ssl_root_cert: Option<PathBuf>,
+    pub(crate) ssl_root_cert: Option<Vec<u8>>,
     pub(crate) host: Vec<Host>,
     pub(crate) hostaddr: Vec<IpAddr>,
     pub(crate) port: Vec<u16>,
@@ -346,30 +346,30 @@ impl Config {
         self.application_name.as_deref()
     }
 
-    /// Sets the location of the client SSL certificate file.
+    /// Sets the client SSL certificate in PEM format.
     ///
     /// Defaults to `None`.
-    pub fn ssl_cert(&mut self, ssl_cert: &str) -> &mut Config {
-        self.ssl_cert = Some(PathBuf::from(ssl_cert));
+    pub fn ssl_cert(&mut self, ssl_cert: &[u8]) -> &mut Config {
+        self.ssl_cert = Some(ssl_cert.into());
         self
     }
 
-    /// Gets the location of the client SSL certificate file.
-    pub fn get_ssl_cert(&self) -> Option<PathBuf> {
-        self.ssl_cert.clone()
+    /// Gets the location of the client SSL certificate in PEM format.
+    pub fn get_ssl_cert(&self) -> Option<&[u8]> {
+        self.ssl_cert.as_deref()
     }
 
-    /// Sets the location of the secret key file used for the client certificate.
+    /// Sets the client SSL key in PEM format.
     ///
     /// Defaults to `None`.
-    pub fn ssl_key(&mut self, ssl_key: &str) -> &mut Config {
-        self.ssl_key = Some(PathBuf::from(ssl_key));
+    pub fn ssl_key(&mut self, ssl_key: &[u8]) -> &mut Config {
+        self.ssl_key = Some(ssl_key.into());
         self
     }
 
-    /// Gets the location of the secret key file used for the client certificate.
-    pub fn get_ssl_key(&self) -> Option<PathBuf> {
-        self.ssl_key.clone()
+    /// Gets the client SSL key in PEM format.
+    pub fn get_ssl_key(&self) -> Option<&[u8]> {
+        self.ssl_key.as_deref()
     }
 
     /// Sets the SSL configuration.
@@ -385,17 +385,17 @@ impl Config {
         self.ssl_mode
     }
 
-    /// Sets the location of SSL certificate authority (CA) certificate.
+    /// Sets the SSL certificate authority (CA) certificate in PEM format.
     ///
     /// Defaults to `None`.
-    pub fn ssl_root_cert(&mut self, ssl_root_cert: &str) -> &mut Config {
-        self.ssl_root_cert = Some(PathBuf::from(ssl_root_cert));
+    pub fn ssl_root_cert(&mut self, ssl_root_cert: &[u8]) -> &mut Config {
+        self.ssl_root_cert = Some(ssl_root_cert.into());
         self
     }
 
-    /// Gets the location of SSL certificate authority (CA) certificate.
-    pub fn get_ssl_root_cert(&self) -> Option<PathBuf> {
-        self.ssl_root_cert.clone()
+    /// Gets the SSL certificate authority (CA) certificate in PEM format.
+    pub fn get_ssl_root_cert(&self) -> Option<&[u8]> {
+        self.ssl_root_cert.as_deref()
     }
 
     /// Adds a host to the configuration.
@@ -630,18 +630,22 @@ impl Config {
             "application_name" => {
                 self.application_name(value);
             }
-            "sslcert" => {
-                if std::fs::metadata(value).is_err() {
+            "sslcert" => match std::fs::read(value) {
+                Ok(contents) => {
+                    self.ssl_cert(&contents);
+                }
+                Err(_) => {
                     return Err(Error::config_parse(Box::new(InvalidValue("sslcert"))));
                 }
-                self.ssl_cert(value);
-            }
-            "sslkey" => {
-                if std::fs::metadata(value).is_err() {
+            },
+            "sslkey" => match std::fs::read(value) {
+                Ok(contents) => {
+                    self.ssl_key(&contents);
+                }
+                Err(_) => {
                     return Err(Error::config_parse(Box::new(InvalidValue("sslkey"))));
                 }
-                self.ssl_key(value);
-            }
+            },
             "sslmode" => {
                 let mode = match value {
                     "disable" => SslMode::Disable,
@@ -653,12 +657,14 @@ impl Config {
                 };
                 self.ssl_mode(mode);
             }
-            "sslrootcert" => {
-                if std::fs::metadata(value).is_err() {
+            "sslrootcert" => match std::fs::read(value) {
+                Ok(contents) => {
+                    self.ssl_root_cert(&contents);
+                }
+                Err(_) => {
                     return Err(Error::config_parse(Box::new(InvalidValue("sslrootcert"))));
                 }
-                self.ssl_root_cert(value);
-            }
+            },
             "host" => {
                 for host in value.split(',') {
                     self.host(host);

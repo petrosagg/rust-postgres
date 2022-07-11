@@ -3,12 +3,12 @@
 use crate::connection::Connection;
 use crate::Client;
 use log::info;
+use std::fmt;
 use std::net::IpAddr;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{fmt, path::PathBuf};
 use tokio::runtime;
 #[doc(inline)]
 pub use tokio_postgres::config::{
@@ -221,29 +221,29 @@ impl Config {
         self.config.get_application_name()
     }
 
-    /// Sets the location of the client SSL certificate file.
+    /// Sets the client SSL certificate in PEM format.
     ///
     /// Defaults to `None`.
-    pub fn ssl_cert(&mut self, ssl_cert: &str) -> &mut Config {
+    pub fn ssl_cert(&mut self, ssl_cert: &[u8]) -> &mut Config {
         self.config.ssl_cert(ssl_cert);
         self
     }
 
-    /// Gets the location of the client SSL certificate file.
-    pub fn get_ssl_cert(&self) -> Option<PathBuf> {
+    /// Gets the location of the client SSL certificate in PEM format.
+    pub fn get_ssl_cert(&self) -> Option<&[u8]> {
         self.config.get_ssl_cert()
     }
 
-    /// Sets the location of the secret key file used for the client certificate.
+    /// Sets the client SSL key in PEM format.
     ///
     /// Defaults to `None`.
-    pub fn ssl_key(&mut self, ssl_key: &str) -> &mut Config {
+    pub fn ssl_key(&mut self, ssl_key: &[u8]) -> &mut Config {
         self.config.ssl_key(ssl_key);
         self
     }
 
-    /// Gets the location of the secret key file used for the client certificate.
-    pub fn get_ssl_key(&self) -> Option<PathBuf> {
+    /// Gets the client SSL key in PEM format.
+    pub fn get_ssl_key(&self) -> Option<&[u8]> {
         self.config.get_ssl_key()
     }
 
@@ -260,16 +260,16 @@ impl Config {
         self.config.get_ssl_mode()
     }
 
-    /// Sets the location of SSL certificate authority (CA) certificate.
+    /// Sets the SSL certificate authority (CA) certificate in PEM format.
     ///
     /// Defaults to `None`.
-    pub fn ssl_root_cert(&mut self, ssl_root_cert: &str) -> &mut Config {
+    pub fn ssl_root_cert(&mut self, ssl_root_cert: &[u8]) -> &mut Config {
         self.config.ssl_root_cert(ssl_root_cert);
         self
     }
 
-    /// Gets the location of SSL certificate authority (CA) certificate.
-    pub fn get_ssl_root_cert(&self) -> Option<PathBuf> {
+    /// Gets the SSL certificate authority (CA) certificate in PEM format.
+    pub fn get_ssl_root_cert(&self) -> Option<&[u8]> {
         self.config.get_ssl_root_cert()
     }
 
