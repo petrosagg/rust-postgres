@@ -3,7 +3,6 @@ use crate::codec::{BackendMessages, FrontendMessage};
 use crate::config::Host;
 use crate::config::SslMode;
 use crate::connection::{Request, RequestMessages};
-use crate::copy_both::CopyBothDuplex;
 use crate::copy_out::CopyOutStream;
 #[cfg(feature = "runtime")]
 use crate::keepalive::KeepaliveConfig;
@@ -16,9 +15,8 @@ use crate::types::{Oid, ToSql, Type};
 #[cfg(feature = "runtime")]
 use crate::Socket;
 use crate::{
-    copy_both, copy_in, copy_out, prepare, query, simple_query, slice_iter, CancelToken,
-    CopyInSink, Error, Row, SimpleQueryMessage, Statement, ToStatement, Transaction,
-    TransactionBuilder,
+    copy_in, copy_out, prepare, query, simple_query, slice_iter, CancelToken, CopyInSink, Error,
+    Row, SimpleQueryMessage, Statement, ToStatement, Transaction, TransactionBuilder,
 };
 use bytes::{Buf, BytesMut};
 use fallible_iterator::FallibleIterator;
