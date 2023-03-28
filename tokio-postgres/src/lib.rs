@@ -242,6 +242,7 @@ pub enum AsyncMessage {
 }
 
 /// Message returned by the `SimpleQuery` stream.
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum SimpleQueryMessage {
     /// A row of data.

@@ -1,4 +1,4 @@
-use futures::StreamExt;
+use futures_util::StreamExt;
 use std::time::{Duration, UNIX_EPOCH};
 
 use postgres_protocol::message::backend::LogicalReplicationMessage::{Begin, Commit, Insert};
