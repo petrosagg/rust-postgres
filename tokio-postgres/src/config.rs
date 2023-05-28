@@ -122,11 +122,14 @@ pub enum Host {
 /// * `options` - Command line options used to configure the server.
 /// * `application_name` - Sets the `application_name` parameter on the server.
 /// * `sslcert` - Location of the client SSL certificate file.
+/// * `sslcert_inline` - The contents of the client SSL certificate.
 /// * `sslkey` - Location for the secret key file used for the client certificate.
+/// * `sslkey_inline` - The contents of the client SSL key.
 /// * `sslmode` - Controls usage of TLS. If set to `disable`, TLS will not be used. If set to `prefer`, TLS will be used
 ///     if available, but not used otherwise. If set to `require`, `verify-ca`, or `verify-full`, TLS will be forced to
 ///     be used. Defaults to `prefer`.
 /// * `sslrootcert` - Location of SSL certificate authority (CA) certificate.
+/// * `sslrootcert_inline` - The contents of the SSL certificate authority.
 /// * `host` - The host to connect to. On Unix platforms, if the host starts with a `/` character it is treated as the
 ///     path to the directory containing Unix domain sockets. Otherwise, it is treated as a hostname. Multiple hosts
 ///     can be specified, separated by commas. Each host will be tried in turn when connecting. Required if connecting
@@ -637,6 +640,9 @@ impl Config {
                     return Err(Error::config_parse(Box::new(InvalidValue("sslcert"))));
                 }
             },
+            "sslcert_inline" => {
+                self.ssl_cert(value.as_bytes());
+            }
             "sslkey" => match std::fs::read(value) {
                 Ok(contents) => {
                     self.ssl_key(&contents);
@@ -645,6 +651,9 @@ impl Config {
                     return Err(Error::config_parse(Box::new(InvalidValue("sslkey"))));
                 }
             },
+            "sslkey_inline" => {
+                self.ssl_key(value.as_bytes());
+            }
             "sslmode" => {
                 let mode = match value {
                     "disable" => SslMode::Disable,
@@ -664,6 +673,9 @@ impl Config {
                     return Err(Error::config_parse(Box::new(InvalidValue("sslrootcert"))));
                 }
             },
+            "sslrootcert_inline" => {
+                self.ssl_root_cert(value.as_bytes());
+            }
             "host" => {
                 for host in value.split(',') {
                     self.host(host);
