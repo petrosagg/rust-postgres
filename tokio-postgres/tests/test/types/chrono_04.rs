@@ -1,4 +1,4 @@
-use chrono_04::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono_04::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use std::fmt;
 use tokio_postgres::types::{Date, FromSqlOwned, Timestamp};
 use tokio_postgres::Client;
