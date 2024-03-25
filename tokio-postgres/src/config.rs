@@ -622,7 +622,7 @@ impl Config {
             "application_name" => {
                 self.application_name(value);
             }
-            "sslcert" => match std::fs::read(&value) {
+            "sslcert" => match std::fs::read(value) {
                 Ok(contents) => {
                     self.ssl_cert(&contents);
                 }
@@ -633,7 +633,7 @@ impl Config {
             "sslcert_inline" => {
                 self.ssl_cert(value.as_bytes());
             }
-            "sslkey" => match std::fs::read(&value) {
+            "sslkey" => match std::fs::read(value) {
                 Ok(contents) => {
                     self.ssl_key(&contents);
                 }
@@ -655,7 +655,7 @@ impl Config {
                 };
                 self.ssl_mode(mode);
             }
-            "sslrootcert" => match std::fs::read(&value) {
+            "sslrootcert" => match std::fs::read(value) {
                 Ok(contents) => {
                     self.ssl_root_cert(&contents);
                 }
