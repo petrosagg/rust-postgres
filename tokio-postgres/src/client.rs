@@ -544,6 +544,11 @@ impl Client {
         TransactionBuilder::new(self)
     }
 
+    /// Returns the server's process ID for the connection.
+    pub fn backend_pid(&self) -> i32 {
+        self.process_id
+    }
+
     /// Constructs a cancellation token that can later be used to request cancellation of a query running on the
     /// connection associated with this client.
     pub fn cancel_token(&self) -> CancelToken {
