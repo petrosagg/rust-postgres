@@ -6,7 +6,6 @@ use crate::connection::Connection;
 use crate::Client;
 use log::info;
 use std::fmt;
-use std::net::IpAddr;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -34,29 +33,12 @@ use tokio_postgres::{Error, Socket};
 /// * `dbname` - The name of the database to connect to. Defaults to the username.
 /// * `options` - Command line options used to configure the server.
 /// * `application_name` - Sets the `application_name` parameter on the server.
-/// * `sslcert` - Location of the client SSL certificate file.
-/// * `sslkey` - Location for the secret key file used for the client certificate.
 /// * `sslmode` - Controls usage of TLS. If set to `disable`, TLS will not be used. If set to `prefer`, TLS will be used
-///     if available, but not used otherwise. If set to `require`, `verify-ca`, or `verify-full`, TLS will be forced to
-///     be used. Defaults to `prefer`.
-/// * `sslrootcert` - Location of SSL certificate authority (CA) certificate.
+///     if available, but not used otherwise. If set to `require`, TLS will be forced to be used. Defaults to `prefer`.
 /// * `host` - The host to connect to. On Unix platforms, if the host starts with a `/` character it is treated as the
 ///     path to the directory containing Unix domain sockets. Otherwise, it is treated as a hostname. Multiple hosts
 ///     can be specified, separated by commas. Each host will be tried in turn when connecting. Required if connecting
 ///     with the `connect` method.
-/// * `hostaddr` - Numeric IP address of host to connect to. This should be in the standard IPv4 address format,
-///     e.g., 172.28.40.9. If your machine supports IPv6, you can also use those addresses.
-///     If this parameter is not specified, the value of `host` will be looked up to find the corresponding IP address,
-///     - or if host specifies an IP address, that value will be used directly.
-///     Using `hostaddr` allows the application to avoid a host name look-up, which might be important in applications
-///     with time constraints. However, a host name is required for verify-full SSL certificate verification.
-///     Specifically:
-///         * If `hostaddr` is specified without `host`, the value for `hostaddr` gives the server network address.
-///             The connection attempt will fail if the authentication method requires a host name;
-///         * If `host` is specified without `hostaddr`, a host name lookup occurs;
-///         * If both `host` and `hostaddr` are specified, the value for `hostaddr` gives the server network address.
-///             The value for `host` is ignored unless the authentication method requires it,
-///             in which case it will be used as the host name.
 /// * `port` - The port to connect to. Multiple ports can be specified, separated by commas. The number of ports must be
 ///     either 1, in which case it will be used for all hosts, or the same as the number of hosts. Defaults to 5432 if
 ///     omitted or the empty string.
@@ -85,10 +67,6 @@ use tokio_postgres::{Error, Socket};
 ///
 /// ```not_rust
 /// host=/var/run/postgresql,localhost port=1234 user=postgres password='password with spaces'
-/// ```
-///
-/// ```not_rust
-/// host=host1,host2,host3 port=1234,,5678 hostaddr=127.0.0.1,127.0.0.2,127.0.0.3 user=postgres target_session_attrs=read-write
 /// ```
 ///
 /// ```not_rust
@@ -212,32 +190,6 @@ impl Config {
         self.config.get_application_name()
     }
 
-    /// Sets the client SSL certificate in PEM format.
-    ///
-    /// Defaults to `None`.
-    pub fn ssl_cert(&mut self, ssl_cert: &[u8]) -> &mut Config {
-        self.config.ssl_cert(ssl_cert);
-        self
-    }
-
-    /// Gets the location of the client SSL certificate in PEM format.
-    pub fn get_ssl_cert(&self) -> Option<&[u8]> {
-        self.config.get_ssl_cert()
-    }
-
-    /// Sets the client SSL key in PEM format.
-    ///
-    /// Defaults to `None`.
-    pub fn ssl_key(&mut self, ssl_key: &[u8]) -> &mut Config {
-        self.config.ssl_key(ssl_key);
-        self
-    }
-
-    /// Gets the client SSL key in PEM format.
-    pub fn get_ssl_key(&self) -> Option<&[u8]> {
-        self.config.get_ssl_key()
-    }
-
     /// Sets the SSL configuration.
     ///
     /// Defaults to `prefer`.
@@ -251,24 +203,10 @@ impl Config {
         self.config.get_ssl_mode()
     }
 
-    /// Sets the SSL certificate authority (CA) certificate in PEM format.
-    ///
-    /// Defaults to `None`.
-    pub fn ssl_root_cert(&mut self, ssl_root_cert: &[u8]) -> &mut Config {
-        self.config.ssl_root_cert(ssl_root_cert);
-        self
-    }
-
-    /// Gets the SSL certificate authority (CA) certificate in PEM format.
-    pub fn get_ssl_root_cert(&self) -> Option<&[u8]> {
-        self.config.get_ssl_root_cert()
-    }
-
     /// Adds a host to the configuration.
     ///
     /// Multiple hosts can be specified by calling this method multiple times, and each will be tried in order. On Unix
     /// systems, a host starting with a `/` is interpreted as a path to a directory containing Unix domain sockets.
-    /// There must be either no hosts, or the same number of hosts as hostaddrs.
     pub fn host(&mut self, host: &str) -> &mut Config {
         self.config.host(host);
         self
@@ -277,11 +215,6 @@ impl Config {
     /// Gets the hosts that have been added to the configuration with `host`.
     pub fn get_hosts(&self) -> &[Host] {
         self.config.get_hosts()
-    }
-
-    /// Gets the hostaddrs that have been added to the configuration with `hostaddr`.
-    pub fn get_hostaddrs(&self) -> &[IpAddr] {
-        self.config.get_hostaddrs()
     }
 
     /// Adds a Unix socket host to the configuration.
@@ -293,15 +226,6 @@ impl Config {
         T: AsRef<Path>,
     {
         self.config.host_path(host);
-        self
-    }
-
-    /// Adds a hostaddr to the configuration.
-    ///
-    /// Multiple hostaddrs can be specified by calling this method multiple times, and each will be tried in order.
-    /// There must be either no hostaddrs, or the same number of hostaddrs as hosts.
-    pub fn hostaddr(&mut self, hostaddr: IpAddr) -> &mut Config {
-        self.config.hostaddr(hostaddr);
         self
     }
 

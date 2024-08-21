@@ -64,7 +64,6 @@ port = 5433
 ssl = on
 ssl_cert_file = 'server.crt'
 ssl_key_file = 'server.key'
-wal_level = logical
 EOCONF
 
 cat > "$PGDATA/pg_hba.conf" <<-EOCONF
@@ -83,7 +82,6 @@ host    all             ssl_user        ::0/0                reject
 
 # IPv4 local connections:
 host    all             postgres        0.0.0.0/0            trust
-host    replication     postgres        0.0.0.0/0            trust
 # IPv6 local connections:
 host    all             postgres        ::0/0                trust
 # Unix socket connections:

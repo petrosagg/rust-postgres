@@ -13,13 +13,10 @@ use crate::{Client, Connection, Error};
 use std::borrow::Cow;
 #[cfg(unix)]
 use std::ffi::OsStr;
-use std::net::IpAddr;
-use std::ops::Deref;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str;
 use std::str::FromStr;
 use std::time::Duration;
@@ -37,8 +34,7 @@ pub enum TargetSessionAttrs {
 }
 
 /// TLS configuration.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SslMode {
     /// Do not use TLS.
@@ -47,10 +43,6 @@ pub enum SslMode {
     Prefer,
     /// Require the use of TLS.
     Require,
-    /// Require the use of TLS.
-    VerifyCa,
-    /// Require the use of TLS.
-    VerifyFull,
 }
 
 /// Channel binding configuration.
@@ -63,26 +55,6 @@ pub enum ChannelBinding {
     Prefer,
     /// Require the use of channel binding.
     Require,
-}
-
-/// Replication mode configuration.
-#[derive(Debug, Copy, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum ReplicationMode {
-    /// Physical replication.
-    Physical,
-    /// Logical replication.
-    Logical,
-}
-
-/// Load balancing configuration.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum LoadBalanceHosts {
-    /// Make connection attempts to hosts in the order provided.
-    Disable,
-    /// Make connection attempts to hosts in a random order.
-    Random,
 }
 
 /// A host specification.
@@ -113,32 +85,12 @@ pub enum Host {
 /// * `dbname` - The name of the database to connect to. Defaults to the username.
 /// * `options` - Command line options used to configure the server.
 /// * `application_name` - Sets the `application_name` parameter on the server.
-/// * `sslcert` - Location of the client SSL certificate file.
-/// * `sslcert_inline` - The contents of the client SSL certificate.
-/// * `sslkey` - Location for the secret key file used for the client certificate.
-/// * `sslkey_inline` - The contents of the client SSL key.
 /// * `sslmode` - Controls usage of TLS. If set to `disable`, TLS will not be used. If set to `prefer`, TLS will be used
-///     if available, but not used otherwise. If set to `require`, `verify-ca`, or `verify-full`, TLS will be forced to
-///     be used. Defaults to `prefer`.
-/// * `sslrootcert` - Location of SSL certificate authority (CA) certificate.
-/// * `sslrootcert_inline` - The contents of the SSL certificate authority.
+///     if available, but not used otherwise. If set to `require`, TLS will be forced to be used. Defaults to `prefer`.
 /// * `host` - The host to connect to. On Unix platforms, if the host starts with a `/` character it is treated as the
 ///     path to the directory containing Unix domain sockets. Otherwise, it is treated as a hostname. Multiple hosts
 ///     can be specified, separated by commas. Each host will be tried in turn when connecting. Required if connecting
 ///     with the `connect` method.
-/// * `hostaddr` - Numeric IP address of host to connect to. This should be in the standard IPv4 address format,
-///     e.g., 172.28.40.9. If your machine supports IPv6, you can also use those addresses.
-///     If this parameter is not specified, the value of `host` will be looked up to find the corresponding IP address,
-///     or if host specifies an IP address, that value will be used directly.
-///     Using `hostaddr` allows the application to avoid a host name look-up, which might be important in applications
-///     with time constraints. However, a host name is required for TLS certificate verification.
-///     Specifically:
-///         * If `hostaddr` is specified without `host`, the value for `hostaddr` gives the server network address.
-///             The connection attempt will fail if the authentication method requires a host name;
-///         * If `host` is specified without `hostaddr`, a host name lookup occurs;
-///         * If both `host` and `hostaddr` are specified, the value for `hostaddr` gives the server network address.
-///             The value for `host` is ignored unless the authentication method requires it,
-///             in which case it will be used as the host name.
 /// * `port` - The port to connect to. Multiple ports can be specified, separated by commas. The number of ports must be
 ///     either 1, in which case it will be used for all hosts, or the same as the number of hosts. Defaults to 5432 if
 ///     omitted or the empty string.
@@ -161,12 +113,6 @@ pub enum Host {
 /// * `channel_binding` - Controls usage of channel binding in the authentication process. If set to `disable`, channel
 ///     binding will not be used. If set to `prefer`, channel binding will be used if available, but not used otherwise.
 ///     If set to `require`, the authentication process will fail if channel binding is not used. Defaults to `prefer`.
-/// * `load_balance_hosts` - Controls the order in which the client tries to connect to the available hosts and
-///     addresses. Once a connection attempt is successful no other hosts and addresses will be tried. This parameter
-///     is typically used in combination with multiple host names or a DNS record that returns multiple IPs. If set to
-///     `disable`, hosts and addresses will be tried in the order provided. If set to `random`, hosts will be tried
-///     in a random order, and the IP addresses resolved from a hostname will also be tried in a random order. Defaults
-///     to `disable`.
 ///
 /// ## Examples
 ///
@@ -176,10 +122,6 @@ pub enum Host {
 ///
 /// ```not_rust
 /// host=/var/lib/postgresql,localhost port=1234 user=postgres password='password with spaces'
-/// ```
-///
-/// ```not_rust
-/// host=host1,host2,host3 port=1234,,5678 hostaddr=127.0.0.1,127.0.0.2,127.0.0.3 user=postgres target_session_attrs=read-write
 /// ```
 ///
 /// ```not_rust
@@ -210,19 +152,15 @@ pub enum Host {
 /// ```not_rust
 /// postgresql:///mydb?user=user&host=/var/lib/postgresql
 /// ```
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     pub(crate) user: Option<String>,
     pub(crate) password: Option<Vec<u8>>,
     pub(crate) dbname: Option<String>,
     pub(crate) options: Option<String>,
     pub(crate) application_name: Option<String>,
-    pub(crate) ssl_cert: Option<Vec<u8>>,
-    pub(crate) ssl_key: Option<Vec<u8>>,
     pub(crate) ssl_mode: SslMode,
-    pub(crate) ssl_root_cert: Option<Vec<u8>>,
     pub(crate) host: Vec<Host>,
-    pub(crate) hostaddr: Vec<IpAddr>,
     pub(crate) port: Vec<u16>,
     pub(crate) connect_timeout: Option<Duration>,
     pub(crate) tcp_user_timeout: Option<Duration>,
@@ -230,8 +168,6 @@ pub struct Config {
     pub(crate) keepalive_config: KeepaliveConfig,
     pub(crate) target_session_attrs: TargetSessionAttrs,
     pub(crate) channel_binding: ChannelBinding,
-    pub(crate) replication_mode: Option<ReplicationMode>,
-    pub(crate) load_balance_hosts: LoadBalanceHosts,
 }
 
 impl Default for Config {
@@ -254,12 +190,8 @@ impl Config {
             dbname: None,
             options: None,
             application_name: None,
-            ssl_cert: None,
-            ssl_key: None,
             ssl_mode: SslMode::Prefer,
-            ssl_root_cert: None,
             host: vec![],
-            hostaddr: vec![],
             port: vec![],
             connect_timeout: None,
             tcp_user_timeout: None,
@@ -267,8 +199,6 @@ impl Config {
             keepalive_config,
             target_session_attrs: TargetSessionAttrs::Any,
             channel_binding: ChannelBinding::Prefer,
-            replication_mode: None,
-            load_balance_hosts: LoadBalanceHosts::Disable,
         }
     }
 
@@ -339,32 +269,6 @@ impl Config {
         self.application_name.as_deref()
     }
 
-    /// Sets the client SSL certificate in PEM format.
-    ///
-    /// Defaults to `None`.
-    pub fn ssl_cert(&mut self, ssl_cert: &[u8]) -> &mut Config {
-        self.ssl_cert = Some(ssl_cert.into());
-        self
-    }
-
-    /// Gets the location of the client SSL certificate in PEM format.
-    pub fn get_ssl_cert(&self) -> Option<&[u8]> {
-        self.ssl_cert.as_deref()
-    }
-
-    /// Sets the client SSL key in PEM format.
-    ///
-    /// Defaults to `None`.
-    pub fn ssl_key(&mut self, ssl_key: &[u8]) -> &mut Config {
-        self.ssl_key = Some(ssl_key.into());
-        self
-    }
-
-    /// Gets the client SSL key in PEM format.
-    pub fn get_ssl_key(&self) -> Option<&[u8]> {
-        self.ssl_key.as_deref()
-    }
-
     /// Sets the SSL configuration.
     ///
     /// Defaults to `prefer`.
@@ -378,24 +282,10 @@ impl Config {
         self.ssl_mode
     }
 
-    /// Sets the SSL certificate authority (CA) certificate in PEM format.
-    ///
-    /// Defaults to `None`.
-    pub fn ssl_root_cert(&mut self, ssl_root_cert: &[u8]) -> &mut Config {
-        self.ssl_root_cert = Some(ssl_root_cert.into());
-        self
-    }
-
-    /// Gets the SSL certificate authority (CA) certificate in PEM format.
-    pub fn get_ssl_root_cert(&self) -> Option<&[u8]> {
-        self.ssl_root_cert.as_deref()
-    }
-
     /// Adds a host to the configuration.
     ///
     /// Multiple hosts can be specified by calling this method multiple times, and each will be tried in order. On Unix
     /// systems, a host starting with a `/` is interpreted as a path to a directory containing Unix domain sockets.
-    /// There must be either no hosts, or the same number of hosts as hostaddrs.
     pub fn host(&mut self, host: &str) -> &mut Config {
         #[cfg(unix)]
         {
@@ -413,23 +303,6 @@ impl Config {
         &self.host
     }
 
-    /// Gets a mutable view of the hosts that have been added to the
-    /// configuration with `host`.
-    pub fn get_hosts_mut(&mut self) -> &mut [Host] {
-        &mut self.host
-    }
-
-    /// Gets the hostaddrs that have been added to the configuration with `hostaddr`.
-    pub fn get_hostaddrs(&self) -> &[IpAddr] {
-        self.hostaddr.deref()
-    }
-
-    /// Gets a mutable view of the hostaddrs that have been added to the
-    /// configuration with `hostaddr`.
-    pub fn get_hostaddrs_mut(&mut self) -> &mut [IpAddr] {
-        &mut self.hostaddr
-    }
-
     /// Adds a Unix socket host to the configuration.
     ///
     /// Unlike `host`, this method allows non-UTF8 paths.
@@ -439,15 +312,6 @@ impl Config {
         T: AsRef<Path>,
     {
         self.host.push(Host::Unix(host.as_ref().to_path_buf()));
-        self
-    }
-
-    /// Adds a hostaddr to the configuration.
-    ///
-    /// Multiple hostaddrs can be specified by calling this method multiple times, and each will be tried in order.
-    /// There must be either no hostaddrs, or the same number of hostaddrs as hosts.
-    pub fn hostaddr(&mut self, hostaddr: IpAddr) -> &mut Config {
-        self.hostaddr.push(hostaddr);
         self
     }
 
@@ -581,30 +445,6 @@ impl Config {
         self.channel_binding
     }
 
-    /// Set replication mode.
-    pub fn replication_mode(&mut self, replication_mode: ReplicationMode) -> &mut Config {
-        self.replication_mode = Some(replication_mode);
-        self
-    }
-
-    /// Get replication mode.
-    pub fn get_replication_mode(&self) -> Option<ReplicationMode> {
-        self.replication_mode
-    }
-
-    /// Sets the host load balancing behavior.
-    ///
-    /// Defaults to `disable`.
-    pub fn load_balance_hosts(&mut self, load_balance_hosts: LoadBalanceHosts) -> &mut Config {
-        self.load_balance_hosts = load_balance_hosts;
-        self
-    }
-
-    /// Gets the host load balancing behavior.
-    pub fn get_load_balance_hosts(&self) -> LoadBalanceHosts {
-        self.load_balance_hosts
-    }
-
     fn param(&mut self, key: &str, value: &str) -> Result<(), Error> {
         match key {
             "user" => {
@@ -622,61 +462,18 @@ impl Config {
             "application_name" => {
                 self.application_name(value);
             }
-            "sslcert" => match std::fs::read(value) {
-                Ok(contents) => {
-                    self.ssl_cert(&contents);
-                }
-                Err(_) => {
-                    return Err(Error::config_parse(Box::new(InvalidValue("sslcert"))));
-                }
-            },
-            "sslcert_inline" => {
-                self.ssl_cert(value.as_bytes());
-            }
-            "sslkey" => match std::fs::read(value) {
-                Ok(contents) => {
-                    self.ssl_key(&contents);
-                }
-                Err(_) => {
-                    return Err(Error::config_parse(Box::new(InvalidValue("sslkey"))));
-                }
-            },
-            "sslkey_inline" => {
-                self.ssl_key(value.as_bytes());
-            }
             "sslmode" => {
                 let mode = match value {
                     "disable" => SslMode::Disable,
                     "prefer" => SslMode::Prefer,
                     "require" => SslMode::Require,
-                    "verify-ca" => SslMode::VerifyCa,
-                    "verify-full" => SslMode::VerifyFull,
                     _ => return Err(Error::config_parse(Box::new(InvalidValue("sslmode")))),
                 };
                 self.ssl_mode(mode);
             }
-            "sslrootcert" => match std::fs::read(value) {
-                Ok(contents) => {
-                    self.ssl_root_cert(&contents);
-                }
-                Err(_) => {
-                    return Err(Error::config_parse(Box::new(InvalidValue("sslrootcert"))));
-                }
-            },
-            "sslrootcert_inline" => {
-                self.ssl_root_cert(value.as_bytes());
-            }
             "host" => {
                 for host in value.split(',') {
                     self.host(host);
-                }
-            }
-            "hostaddr" => {
-                for hostaddr in value.split(',') {
-                    let addr = hostaddr
-                        .parse()
-                        .map_err(|_| Error::config_parse(Box::new(InvalidValue("hostaddr"))))?;
-                    self.hostaddr(addr);
                 }
             }
             "port" => {
@@ -759,29 +556,6 @@ impl Config {
                 };
                 self.channel_binding(channel_binding);
             }
-            "replication" => {
-                let mode = match value {
-                    "off" => None,
-                    "true" => Some(ReplicationMode::Physical),
-                    "database" => Some(ReplicationMode::Logical),
-                    _ => return Err(Error::config_parse(Box::new(InvalidValue("replication")))),
-                };
-                if let Some(mode) = mode {
-                    self.replication_mode(mode);
-                }
-            }
-            "load_balance_hosts" => {
-                let load_balance_hosts = match value {
-                    "disable" => LoadBalanceHosts::Disable,
-                    "random" => LoadBalanceHosts::Random,
-                    _ => {
-                        return Err(Error::config_parse(Box::new(InvalidValue(
-                            "load_balance_hosts",
-                        ))))
-                    }
-                };
-                self.load_balance_hosts(load_balance_hosts);
-            }
             key => {
                 return Err(Error::config_parse(Box::new(UnknownOption(
                     key.to_string(),
@@ -815,7 +589,7 @@ impl Config {
         S: AsyncRead + AsyncWrite + Unpin,
         T: TlsConnect<S>,
     {
-        connect_raw(stream, tls, true, self).await
+        connect_raw(stream, tls, self).await
     }
 }
 
@@ -846,12 +620,8 @@ impl fmt::Debug for Config {
             .field("dbname", &self.dbname)
             .field("options", &self.options)
             .field("application_name", &self.application_name)
-            .field("ssl_cert", &self.ssl_cert)
-            .field("ssl_key", &self.ssl_key)
             .field("ssl_mode", &self.ssl_mode)
-            .field("ssl_root_cert", &self.ssl_root_cert)
             .field("host", &self.host)
-            .field("hostaddr", &self.hostaddr)
             .field("port", &self.port)
             .field("connect_timeout", &self.connect_timeout)
             .field("tcp_user_timeout", &self.tcp_user_timeout)
@@ -861,7 +631,6 @@ impl fmt::Debug for Config {
             .field("keepalives_retries", &self.keepalive_config.retries)
             .field("target_session_attrs", &self.target_session_attrs)
             .field("channel_binding", &self.channel_binding)
-            .field("replication", &self.replication_mode)
             .finish()
     }
 }
@@ -1234,43 +1003,5 @@ impl<'a> UrlParser<'a> {
         percent_encoding::percent_decode(s.as_bytes())
             .decode_utf8()
             .map_err(|e| Error::config_parse(e.into()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::net::IpAddr;
-
-    use crate::{config::Host, Config};
-
-    #[test]
-    fn test_simple_parsing() {
-        let s = "user=pass_user dbname=postgres host=host1,host2 hostaddr=127.0.0.1,127.0.0.2 port=26257";
-        let config = s.parse::<Config>().unwrap();
-        assert_eq!(Some("pass_user"), config.get_user());
-        assert_eq!(Some("postgres"), config.get_dbname());
-        assert_eq!(
-            [
-                Host::Tcp("host1".to_string()),
-                Host::Tcp("host2".to_string())
-            ],
-            config.get_hosts(),
-        );
-
-        assert_eq!(
-            [
-                "127.0.0.1".parse::<IpAddr>().unwrap(),
-                "127.0.0.2".parse::<IpAddr>().unwrap()
-            ],
-            config.get_hostaddrs(),
-        );
-
-        assert_eq!(1, 1);
-    }
-
-    #[test]
-    fn test_invalid_hostaddr_parsing() {
-        let s = "user=pass_user dbname=postgres host=host1 hostaddr=127.0.0 port=26257";
-        s.parse::<Config>().err().unwrap();
     }
 }

@@ -55,7 +55,6 @@ impl CancelToken {
             stream,
             self.ssl_mode,
             tls,
-            true,
             self.process_id,
             self.secret_key,
         )

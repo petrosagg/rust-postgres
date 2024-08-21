@@ -40,7 +40,7 @@ impl ToSql for NaiveDateTime {
 impl<'a> FromSql<'a> for DateTime<Utc> {
     fn from_sql(type_: &Type, raw: &[u8]) -> Result<DateTime<Utc>, Box<dyn Error + Sync + Send>> {
         let naive = NaiveDateTime::from_sql(type_, raw)?;
-        Ok(DateTime::from_naive_utc_and_offset(naive, Utc))
+        Ok(DateTime::from_utc(naive, Utc))
     }
 
     accepts!(TIMESTAMPTZ);
@@ -111,7 +111,7 @@ impl<'a> FromSql<'a> for NaiveDate {
         let jd = types::date_from_sql(raw)?;
         base()
             .date()
-            .checked_add_signed(Duration::try_days(i64::from(jd)).unwrap())
+            .checked_add_signed(Duration::days(i64::from(jd)))
             .ok_or_else(|| "value too large to decode".into())
     }
 

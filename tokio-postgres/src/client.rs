@@ -1,7 +1,8 @@
 use crate::codec::{BackendMessages, FrontendMessage};
+#[cfg(feature = "runtime")]
+use crate::config::Host;
 use crate::config::SslMode;
 use crate::connection::{Request, RequestMessages};
-use crate::copy_both::CopyBothDuplex;
 use crate::copy_out::CopyOutStream;
 #[cfg(feature = "runtime")]
 use crate::keepalive::KeepaliveConfig;
@@ -14,9 +15,8 @@ use crate::types::{Oid, ToSql, Type};
 #[cfg(feature = "runtime")]
 use crate::Socket;
 use crate::{
-    copy_both, copy_in, copy_out, prepare, query, simple_query, slice_iter, CancelToken,
-    CopyInSink, Error, Row, SimpleQueryMessage, Statement, ToStatement, Transaction,
-    TransactionBuilder,
+    copy_in, copy_out, prepare, query, simple_query, slice_iter, CancelToken, CopyInSink, Error,
+    Row, SimpleQueryMessage, Statement, ToStatement, Transaction, TransactionBuilder,
 };
 use bytes::{Buf, BytesMut};
 use fallible_iterator::FallibleIterator;
@@ -27,10 +27,6 @@ use postgres_protocol::message::{backend::Message, frontend};
 use postgres_types::BorrowToSql;
 use std::collections::HashMap;
 use std::fmt;
-#[cfg(feature = "runtime")]
-use std::net::IpAddr;
-#[cfg(feature = "runtime")]
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 #[cfg(feature = "runtime")]
@@ -157,20 +153,11 @@ impl InnerClient {
 #[cfg(feature = "runtime")]
 #[derive(Clone)]
 pub(crate) struct SocketConfig {
-    pub addr: Addr,
-    pub hostname: Option<String>,
+    pub host: Host,
     pub port: u16,
     pub connect_timeout: Option<Duration>,
     pub tcp_user_timeout: Option<Duration>,
     pub keepalive: Option<KeepaliveConfig>,
-}
-
-#[cfg(feature = "runtime")]
-#[derive(Clone)]
-pub(crate) enum Addr {
-    Tcp(IpAddr),
-    #[cfg(unix)]
-    Unix(PathBuf),
 }
 
 /// An asynchronous PostgreSQL client.
@@ -425,14 +412,6 @@ impl Client {
         copy_in::copy_in(self.inner(), statement).await
     }
 
-    /// Executes a `COPY FROM STDIN` query, returning a sink used to write the copy data.
-    pub async fn copy_in_simple<U>(&self, query: &str) -> Result<CopyInSink<U>, Error>
-    where
-        U: Buf + 'static + Send,
-    {
-        copy_in::copy_in_simple(self.inner(), query).await
-    }
-
     /// Executes a `COPY TO STDOUT` statement, returning a stream of the resulting data.
     ///
     /// PostgreSQL does not support parameters in `COPY` statements, so this method does not take any.
@@ -442,20 +421,6 @@ impl Client {
     {
         let statement = statement.__convert().into_statement(self).await?;
         copy_out::copy_out(self.inner(), statement).await
-    }
-
-    /// Executes a `COPY TO STDOUT` query, returning a stream of the resulting data.
-    pub async fn copy_out_simple(&self, query: &str) -> Result<CopyOutStream, Error> {
-        copy_out::copy_out_simple(self.inner(), query).await
-    }
-
-    /// Executes a CopyBoth query, returning a combined Stream+Sink type to read and write copy
-    /// data.
-    pub async fn copy_both_simple<T>(&self, query: &str) -> Result<CopyBothDuplex<T>, Error>
-    where
-        T: Buf + 'static + Send,
-    {
-        copy_both::copy_both_simple(self.inner(), query).await
     }
 
     /// Executes a sequence of SQL statements using the simple query protocol, returning the resulting rows.
@@ -542,11 +507,6 @@ impl Client {
     /// attributes.
     pub fn build_transaction(&mut self) -> TransactionBuilder<'_> {
         TransactionBuilder::new(self)
-    }
-
-    /// Returns the server's process ID for the connection.
-    pub fn backend_pid(&self) -> i32 {
-        self.process_id
     }
 
     /// Constructs a cancellation token that can later be used to request cancellation of a query running on the

@@ -1,34 +1,46 @@
-# Materialize fork of Rust-Postgres
+# Rust-Postgres
 
-This repo serves as a staging area for Materialize patches to the
-[rust-postgres] client before they are accepted upstream.
+PostgreSQL support for Rust.
 
-There are no releases from this fork. The [MaterializeInc/materialize]
-repository simply pins a recent commit from the `master` branch. Other projects
-are welcome to do the same. The `master` branch is never force pushed. Upstream
-changes are periodically into `master` via `git merge`.
+## postgres [![Latest Version](https://img.shields.io/crates/v/postgres.svg)](https://crates.io/crates/postgres)
 
-## Adding a new patch
+[Documentation](https://docs.rs/postgres)
 
-Develop your patch against the master branch of the upstream [rust-postgres]
-project. Open a PR with your changes. If your PR is not merged quickly, open the
-same PR against this repository and request a review from a Materialize
-engineer.
+A native, synchronous PostgreSQL client.
 
-The long-term goal is to get every patch merged upstream.
+## tokio-postgres [![Latest Version](https://img.shields.io/crates/v/tokio-postgres.svg)](https://crates.io/crates/tokio-postgres)
 
-## Integrating upstream changes
+[Documentation](https://docs.rs/tokio-postgres)
 
-```shell
-git clone https://github.com/MaterializeInc/rust-postgres.git
-git remote add upstream https://github.com/sfackler/rust-postgres.git
-git checkout master
-git pull
-git checkout -b integrate-upstream
-git fetch upstream
-git merge upstream/master
-# Resolve any conflicts, then open a PR against this repository with the merge commit.
-```
+A native, asynchronous PostgreSQL client.
 
-[rust-postgres]: https://github.com/sfackler/rust-postgres
-[MaterializeInc/materialize]: https://github.com/MaterializeInc/materialize
+## postgres-types [![Latest Version](https://img.shields.io/crates/v/postgres-types.svg)](https://crates.io/crates/postgres-types)
+
+[Documentation](https://docs.rs/postgres-types)
+
+Conversions between Rust and Postgres types.
+
+## postgres-native-tls [![Latest Version](https://img.shields.io/crates/v/postgres-native-tls.svg)](https://crates.io/crates/postgres-native-tls)
+
+[Documentation](https://docs.rs/postgres-native-tls)
+
+TLS support for postgres and tokio-postgres via native-tls.
+
+## postgres-openssl [![Latest Version](https://img.shields.io/crates/v/postgres-openssl.svg)](https://crates.io/crates/postgres-openssl)
+
+[Documentation](https://docs.rs/postgres-openssl)
+
+TLS support for postgres and tokio-postgres via openssl.
+
+# Running test suite
+
+The test suite requires postgres to be running in the correct configuration. The easiest way to do this is with docker:
+
+1. Install `docker` and `docker-compose`.
+   1. On ubuntu: `sudo apt install docker.io docker-compose`.
+1. Make sure your user has permissions for docker.
+   1. On ubuntu: ``sudo usermod -aG docker $USER``
+1. Change to top-level directory of `rust-postgres` repo.
+1. Run `docker-compose up -d`.
+1. Run `cargo test`.
+1. Run `docker-compose stop`.

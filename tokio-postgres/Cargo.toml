@@ -55,11 +55,9 @@ pin-project-lite = "0.2"
 phf = "0.11"
 postgres-protocol = { version = "0.6.4", path = "../postgres-protocol" }
 postgres-types = { version = "0.2.4", path = "../postgres-types" }
-serde = { version = "1.0", optional = true }
 socket2 = { version = "0.5", features = ["all"] }
 tokio = { version = "1.27", features = ["io-util"] }
 tokio-util = { version = "0.7", features = ["codec"] }
-rand = "0.8.5"
 
 [dev-dependencies]
 futures-executor = "0.3"
@@ -79,6 +77,7 @@ eui48-04 = { version = "0.4", package = "eui48" }
 eui48-1 = { version = "1.0", package = "eui48" }
 geo-types-06 = { version = "0.6", package = "geo-types" }
 geo-types-07 = { version = "0.7", package = "geo-types" }
+serde-1 = { version = "1.0", package = "serde" }
 serde_json-1 = { version = "1.0", package = "serde_json" }
 smol_str-01 = { version = "0.1", package = "smol_str" }
 uuid-08 = { version = "0.8", package = "uuid" }

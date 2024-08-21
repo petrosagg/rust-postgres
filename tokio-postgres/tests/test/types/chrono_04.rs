@@ -1,4 +1,4 @@
-use chrono_04::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono_04::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use std::fmt;
 use tokio_postgres::types::{Date, FromSqlOwned, Timestamp};
 use tokio_postgres::Client;
@@ -54,9 +54,8 @@ async fn test_date_time_params() {
     fn make_check(time: &str) -> (Option<DateTime<Utc>>, &str) {
         (
             Some(
-                NaiveDateTime::parse_from_str(time, "'%Y-%m-%d %H:%M:%S.%f'")
-                    .unwrap()
-                    .and_utc(),
+                Utc.datetime_from_str(time, "'%Y-%m-%d %H:%M:%S.%f'")
+                    .unwrap(),
             ),
             time,
         )
@@ -78,9 +77,8 @@ async fn test_with_special_date_time_params() {
     fn make_check(time: &str) -> (Timestamp<DateTime<Utc>>, &str) {
         (
             Timestamp::Value(
-                NaiveDateTime::parse_from_str(time, "'%Y-%m-%d %H:%M:%S.%f'")
-                    .unwrap()
-                    .and_utc(),
+                Utc.datetime_from_str(time, "'%Y-%m-%d %H:%M:%S.%f'")
+                    .unwrap(),
             ),
             time,
         )
