@@ -1,9 +1,9 @@
 [package]
 name = "tokio-postgres"
-version = "0.7.8"
+version = "0.7.11"
 authors = ["Steven Fackler <sfackler@gmail.com>"]
 edition = "2018"
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 description = "A native, asynchronous PostgreSQL client"
 repository = "https://github.com/sfackler/rust-postgres"
 readme = "../README.md"
@@ -40,6 +40,7 @@ with-uuid-0_8 = ["postgres-types/with-uuid-0_8"]
 with-uuid-1 = ["postgres-types/with-uuid-1"]
 with-time-0_2 = ["postgres-types/with-time-0_2"]
 with-time-0_3 = ["postgres-types/with-time-0_3"]
+js = ["postgres-protocol/js", "postgres-types/js"]
 
 [dependencies]
 async-trait = "0.1"
@@ -53,16 +54,20 @@ parking_lot = "0.12"
 percent-encoding = "2.0"
 pin-project-lite = "0.2"
 phf = "0.11"
-postgres-protocol = { version = "0.6.4", path = "../postgres-protocol" }
-postgres-types = { version = "0.2.4", path = "../postgres-types" }
-socket2 = { version = "0.5", features = ["all"] }
+postgres-protocol = { version = "0.6.7", path = "../postgres-protocol" }
+postgres-types = { version = "0.2.7", path = "../postgres-types" }
 tokio = { version = "1.27", features = ["io-util"] }
 tokio-util = { version = "0.7", features = ["codec"] }
+rand = "0.8.5"
+whoami = "1.4.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+socket2 = { version = "0.5", features = ["all"] }
 
 [dev-dependencies]
 futures-executor = "0.3"
-criterion = "0.4"
-env_logger = "0.10"
+criterion = "0.5"
+env_logger = "0.11"
 tokio = { version = "1.0", features = [
     "macros",
     "net",
@@ -73,8 +78,7 @@ tokio = { version = "1.0", features = [
 
 bit-vec-06 = { version = "0.6", package = "bit-vec" }
 chrono-04 = { version = "0.4", package = "chrono", default-features = false }
-eui48-04 = { version = "0.4", package = "eui48" }
-eui48-1 = { version = "1.0", package = "eui48" }
+eui48-1 = { version = "1.0", package = "eui48", default-features = false }
 geo-types-06 = { version = "0.6", package = "geo-types" }
 geo-types-07 = { version = "0.7", package = "geo-types" }
 serde-1 = { version = "1.0", package = "serde" }

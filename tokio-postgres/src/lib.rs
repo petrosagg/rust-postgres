@@ -107,7 +107,7 @@
 //! | `array-impls` | Enables `ToSql` and `FromSql` trait impls for arrays | - | no |
 //! | `with-bit-vec-0_6` | Enable support for the `bit-vec` crate. | [bit-vec](https://crates.io/crates/bit-vec) 0.6 | no |
 //! | `with-chrono-0_4` | Enable support for the `chrono` crate. | [chrono](https://crates.io/crates/chrono) 0.4 | no |
-//! | `with-eui48-0_4` | Enable support for the 0.4 version of the `eui48` crate. | [eui48](https://crates.io/crates/eui48) 0.4 | no |
+//! | `with-eui48-0_4` | Enable support for the 0.4 version of the `eui48` crate. This is deprecated and will be removed. | [eui48](https://crates.io/crates/eui48) 0.4 | no |
 //! | `with-eui48-1` | Enable support for the 1.0 version of the `eui48` crate. | [eui48](https://crates.io/crates/eui48) 1.0 | no |
 //! | `with-geo-types-0_6` | Enable support for the 0.6 version of the `geo-types` crate. | [geo-types](https://crates.io/crates/geo-types/0.6.0) 0.6 | no |
 //! | `with-geo-types-0_7` | Enable support for the 0.7 version of the `geo-types` crate. | [geo-types](https://crates.io/crates/geo-types/0.7.0) 0.7 | no |
@@ -116,7 +116,6 @@
 //! | `with-uuid-1` | Enable support for the `uuid` crate. | [uuid](https://crates.io/crates/uuid) 1.0 | no |
 //! | `with-time-0_2` | Enable support for the 0.2 version of the `time` crate. | [time](https://crates.io/crates/time/0.2.0) 0.2 | no |
 //! | `with-time-0_3` | Enable support for the 0.3 version of the `time` crate. | [time](https://crates.io/crates/time/0.3.0) 0.3 | no |
-#![doc(html_root_url = "https://docs.rs/tokio-postgres/0.7")]
 #![warn(rust_2018_idioms, clippy::all, missing_docs)]
 
 pub use crate::cancel_token::CancelToken;
@@ -131,7 +130,7 @@ pub use crate::generic_client::GenericClient;
 pub use crate::portal::Portal;
 pub use crate::query::RowStream;
 pub use crate::row::{Row, SimpleQueryRow};
-pub use crate::simple_query::SimpleQueryStream;
+pub use crate::simple_query::{SimpleColumn, SimpleQueryStream};
 #[cfg(feature = "runtime")]
 pub use crate::socket::Socket;
 pub use crate::statement::{Column, Statement};
@@ -142,6 +141,7 @@ pub use crate::to_statement::ToStatement;
 pub use crate::transaction::Transaction;
 pub use crate::transaction_builder::{IsolationLevel, TransactionBuilder};
 use crate::types::ToSql;
+use std::sync::Arc;
 
 pub mod binary_copy;
 mod bind;
@@ -163,6 +163,7 @@ mod copy_in;
 mod copy_out;
 pub mod error;
 mod generic_client;
+#[cfg(not(target_arch = "wasm32"))]
 mod keepalive;
 mod maybe_tls_stream;
 mod portal;
@@ -248,6 +249,8 @@ pub enum SimpleQueryMessage {
     ///
     /// The number of rows modified or selected is returned.
     CommandComplete(u64),
+    /// Column values of the proceeding row values
+    RowDescription(Arc<[SimpleColumn]>),
 }
 
 fn slice_iter<'a>(

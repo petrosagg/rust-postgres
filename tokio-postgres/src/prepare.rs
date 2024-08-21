@@ -95,7 +95,12 @@ pub async fn prepare(
         let mut it = row_description.fields();
         while let Some(field) = it.next().map_err(Error::parse)? {
             let type_ = get_type(client, field.type_oid()).await?;
-            let column = Column::new(field.name().to_string(), type_);
+            let column = Column {
+                name: field.name().to_string(),
+                table_oid: Some(field.table_oid()).filter(|n| *n != 0),
+                column_id: Some(field.column_id()).filter(|n| *n != 0),
+                r#type: type_,
+            };
             columns.push(column);
         }
     }
@@ -126,7 +131,7 @@ fn encode(client: &InnerClient, name: &str, query: &str, types: &[Type]) -> Resu
     })
 }
 
-async fn get_type(client: &Arc<InnerClient>, oid: Oid) -> Result<Type, Error> {
+pub(crate) async fn get_type(client: &Arc<InnerClient>, oid: Oid) -> Result<Type, Error> {
     if let Some(type_) = Type::from_oid(oid) {
         return Ok(type_);
     }

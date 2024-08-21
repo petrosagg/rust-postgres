@@ -1,5 +1,26 @@
 # Change Log
 
+## v0.6.7 - 2024-07-21
+
+### Deprecated
+
+* Deprecated `ErrorField::value`.
+
+### Added
+
+* Added a `Clone` implementation for `DataRowBody`.
+* Added `ErrorField::value_bytes`.
+
+### Changed
+
+* Upgraded `base64`.
+
+## v0.6.6 - 2023-08-19
+
+### Added
+
+* Added the `js` feature for WASM support.
+
 ## v0.6.5 - 2023-03-27
 
 ### Added
