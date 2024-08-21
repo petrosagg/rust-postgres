@@ -1,11 +1,12 @@
-use futures_util::StreamExt;
 use std::time::{Duration, UNIX_EPOCH};
 
-use postgres_protocol::message::backend::LogicalReplicationMessage::{Begin, Commit, Insert};
-use postgres_protocol::message::backend::ReplicationMessage::*;
-use postgres_protocol::message::backend::TupleData;
+use futures_util::StreamExt;
+
+use postgres_replication::protocol::LogicalReplicationMessage::{Begin, Commit, Insert};
+use postgres_replication::protocol::ReplicationMessage::*;
+use postgres_replication::protocol::TupleData;
+use postgres_replication::LogicalReplicationStream;
 use postgres_types::PgLsn;
-use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::NoTls;
 use tokio_postgres::SimpleQueryMessage::Row;
 
@@ -32,7 +33,7 @@ async fn test_replication() {
         .simple_query("SELECT 'test_logical_replication'::regclass::oid")
         .await
         .unwrap();
-    let rel_id: u32 = if let Row(row) = &res[0] {
+    let rel_id: u32 = if let Row(row) = &res[1] {
         row.get("oid").unwrap().parse().unwrap()
     } else {
         panic!("unexpeced query message");
@@ -54,7 +55,7 @@ async fn test_replication() {
         slot
     );
     let slot_query = client.simple_query(&query).await.unwrap();
-    let lsn = if let Row(row) = &slot_query[0] {
+    let lsn = if let Row(row) = &slot_query[1] {
         row.get("consistent_point").unwrap()
     } else {
         panic!("unexpeced query message");

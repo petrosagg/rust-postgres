@@ -1,9 +1,9 @@
 [package]
 name = "postgres-types"
-version = "0.2.5"
+version = "0.2.7"
 authors = ["Steven Fackler <sfackler@gmail.com>"]
 edition = "2018"
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 description = "Conversions between Rust and Postgres values"
 repository = "https://github.com/sfackler/rust-postgres"
 readme = "../README.md"
@@ -13,6 +13,7 @@ categories = ["database"]
 [features]
 derive = ["postgres-derive"]
 array-impls = ["array-init"]
+js = ["postgres-protocol/js"]
 with-bit-vec-0_6 = ["bit-vec-06"]
 with-cidr-0_2 = ["cidr-02"]
 with-chrono-0_4 = ["chrono-04"]
@@ -30,8 +31,8 @@ with-time-0_3 = ["time-03"]
 [dependencies]
 bytes = "1.0"
 fallible-iterator = "0.2"
-postgres-protocol = { version = "0.6.4", path = "../postgres-protocol" }
-postgres-derive = { version = "0.4.2", optional = true, path = "../postgres-derive" }
+postgres-protocol = { version = "0.6.7", path = "../postgres-protocol" }
+postgres-derive = { version = "0.4.5", optional = true, path = "../postgres-derive" }
 
 array-init = { version = "2", optional = true }
 bit-vec-06 = { version = "0.6", package = "bit-vec", optional = true }
@@ -39,8 +40,10 @@ chrono-04 = { version = "0.4.16", package = "chrono", default-features = false, 
     "clock",
 ], optional = true }
 cidr-02 = { version = "0.2", package = "cidr", optional = true }
+# eui48-04 will stop compiling and support will be removed
+# See https://github.com/sfackler/rust-postgres/issues/1073
 eui48-04 = { version = "0.4", package = "eui48", optional = true }
-eui48-1 = { version = "1.0", package = "eui48", optional = true }
+eui48-1 = { version = "1.0", package = "eui48", optional = true, default-features = false }
 geo-types-06 = { version = "0.6", package = "geo-types", optional = true }
 geo-types-0_7 = { version = "0.7", package = "geo-types", optional = true }
 serde-1 = { version = "1.0", package = "serde", optional = true }

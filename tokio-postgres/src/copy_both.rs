@@ -1,10 +1,9 @@
 use crate::client::{InnerClient, Responses};
 use crate::codec::FrontendMessage;
-use crate::connection::RequestMessages;
 use crate::{simple_query, Error};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures_channel::mpsc;
-use futures_util::{future, ready, Sink, SinkExt, Stream, StreamExt};
+use futures_util::{ready, Sink, SinkExt, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
 use postgres_protocol::message::backend::Message;
@@ -14,136 +13,240 @@ use std::marker::{PhantomData, PhantomPinned};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-pub(crate) enum CopyBothMessage {
-    Message(FrontendMessage),
-    Done,
+/// The state machine of CopyBothReceiver
+///
+/// ```ignore
+///      CopyBoth
+///       /   \
+///      v     v
+///  CopyOut  CopyIn
+///       \   /
+///        v v
+///      CopyNone
+///         |
+///         v
+///    CopyComplete
+///         |
+///         v
+///   CommandComplete
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CopyBothState {
+    /// The state before having entered the CopyBoth mode.
+    Setup,
+    /// Initial state where CopyData messages can go in both directions
+    CopyBoth,
+    /// The server->client stream is closed and we're in CopyIn mode
+    CopyIn,
+    /// The client->server stream is closed and we're in CopyOut mode
+    CopyOut,
+    /// Both directions are closed, we waiting for CommandComplete messages
+    CopyNone,
+    /// We have received the first CommandComplete message for the copy
+    CopyComplete,
+    /// We have received the final CommandComplete message for the statement
+    CommandComplete,
 }
 
+/// A CopyBothReceiver is responsible for handling the CopyBoth subprotocol. It ensures that no
+/// matter what the users do with their CopyBothDuplex handle we're always going to send the
+/// correct messages to the backend in order to restore the connection into a usable state.
+///
+/// ```ignore
+///                                          |
+///          <tokio_postgres owned>          |    <userland owned>
+///                                          |
+///  pg -> Connection -> CopyBothReceiver ---+---> CopyBothDuplex
+///                                          |          ^   \
+///                                          |         /     v
+///                                          |      Sink    Stream
+/// ```
 pub struct CopyBothReceiver {
-    receiver: mpsc::Receiver<CopyBothMessage>,
-    done: bool,
+    /// Receiver of backend messages from the underlying [Connection](crate::Connection)
+    responses: Responses,
+    /// Receiver of frontend messages sent by the user using <CopyBothDuplex as Sink>
+    sink_receiver: mpsc::Receiver<FrontendMessage>,
+    /// Sender of CopyData contents to be consumed by the user using <CopyBothDuplex as Stream>
+    stream_sender: mpsc::Sender<Result<Message, Error>>,
+    /// The current state of the subprotocol
+    state: CopyBothState,
+    /// Holds a buffered message until we are ready to send it to the user's stream
+    buffered_message: Option<Result<Message, Error>>,
 }
 
 impl CopyBothReceiver {
-    pub(crate) fn new(receiver: mpsc::Receiver<CopyBothMessage>) -> CopyBothReceiver {
+    pub(crate) fn new(
+        responses: Responses,
+        sink_receiver: mpsc::Receiver<FrontendMessage>,
+        stream_sender: mpsc::Sender<Result<Message, Error>>,
+    ) -> CopyBothReceiver {
         CopyBothReceiver {
-            receiver,
-            done: false,
+            responses,
+            sink_receiver,
+            stream_sender,
+            state: CopyBothState::Setup,
+            buffered_message: None,
+        }
+    }
+
+    /// Convenience method to set the subprotocol into an unexpected message state
+    fn unexpected_message(&mut self) {
+        self.sink_receiver.close();
+        self.buffered_message = Some(Err(Error::unexpected_message()));
+        self.state = CopyBothState::CommandComplete;
+    }
+
+    /// Processes messages from the backend, it will resolve once all backend messages have been
+    /// processed
+    fn poll_backend(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        use CopyBothState::*;
+
+        loop {
+            // Deliver the buffered message (if any) to the user to ensure we can potentially
+            // buffer a new one in response to a server message
+            if let Some(message) = self.buffered_message.take() {
+                match self.stream_sender.poll_ready(cx) {
+                    Poll::Ready(_) => {
+                        // If the receiver has hung up we'll just drop the message
+                        let _ = self.stream_sender.start_send(message);
+                    }
+                    Poll::Pending => {
+                        // Stash the message and try again later
+                        self.buffered_message = Some(message);
+                        return Poll::Pending;
+                    }
+                }
+            }
+
+            match ready!(self.responses.poll_next_unpin(cx)) {
+                Some(Ok(Message::CopyBothResponse(body))) => match self.state {
+                    Setup => {
+                        self.buffered_message = Some(Ok(Message::CopyBothResponse(body)));
+                        self.state = CopyBoth;
+                    }
+                    _ => self.unexpected_message(),
+                },
+                Some(Ok(Message::CopyData(body))) => match self.state {
+                    CopyBoth | CopyOut => {
+                        self.buffered_message = Some(Ok(Message::CopyData(body)));
+                    }
+                    _ => self.unexpected_message(),
+                },
+                // The server->client stream is done
+                Some(Ok(Message::CopyDone)) => {
+                    match self.state {
+                        CopyBoth => self.state = CopyIn,
+                        CopyOut => self.state = CopyNone,
+                        _ => self.unexpected_message(),
+                    };
+                }
+                Some(Ok(Message::CommandComplete(_))) => {
+                    match self.state {
+                        CopyNone => self.state = CopyComplete,
+                        CopyComplete => {
+                            self.stream_sender.close_channel();
+                            self.sink_receiver.close();
+                            self.state = CommandComplete;
+                        }
+                        _ => self.unexpected_message(),
+                    };
+                }
+                // The server indicated an error, terminate our side if we haven't already
+                Some(Err(err)) => {
+                    match self.state {
+                        Setup | CopyBoth | CopyOut | CopyIn => {
+                            self.sink_receiver.close();
+                            self.buffered_message = Some(Err(err));
+                            self.state = CommandComplete;
+                        }
+                        _ => self.unexpected_message(),
+                    };
+                }
+                Some(Ok(Message::ReadyForQuery(_))) => match self.state {
+                    CommandComplete => {
+                        self.sink_receiver.close();
+                        self.stream_sender.close_channel();
+                    }
+                    _ => self.unexpected_message(),
+                },
+                Some(Ok(_)) => self.unexpected_message(),
+                None => return Poll::Ready(()),
+            }
         }
     }
 }
 
+/// The [Connection](crate::Connection) will keep polling this stream until it is exhausted. This
+/// is the mechanism that drives the CopyBoth subprotocol forward
 impl Stream for CopyBothReceiver {
     type Item = FrontendMessage;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<FrontendMessage>> {
-        if self.done {
-            return Poll::Ready(None);
-        }
+        use CopyBothState::*;
 
-        match ready!(self.receiver.poll_next_unpin(cx)) {
-            Some(CopyBothMessage::Message(message)) => Poll::Ready(Some(message)),
-            Some(CopyBothMessage::Done) => {
-                self.done = true;
-                let mut buf = BytesMut::new();
-                frontend::copy_done(&mut buf);
-                frontend::sync(&mut buf);
-                Poll::Ready(Some(FrontendMessage::Raw(buf.freeze())))
-            }
-            None => {
-                self.done = true;
-                let mut buf = BytesMut::new();
-                frontend::copy_fail("", &mut buf).unwrap();
-                frontend::sync(&mut buf);
-                Poll::Ready(Some(FrontendMessage::Raw(buf.freeze())))
-            }
+        match self.poll_backend(cx) {
+            Poll::Ready(()) => Poll::Ready(None),
+            Poll::Pending => match self.state {
+                Setup | CopyBoth | CopyIn => match ready!(self.sink_receiver.poll_next_unpin(cx)) {
+                    Some(msg) => Poll::Ready(Some(msg)),
+                    None => {
+                        self.state = match self.state {
+                            CopyBoth => CopyOut,
+                            CopyIn => CopyNone,
+                            _ => unreachable!(),
+                        };
+
+                        let mut buf = BytesMut::new();
+                        frontend::copy_done(&mut buf);
+                        Poll::Ready(Some(FrontendMessage::Raw(buf.freeze())))
+                    }
+                },
+                _ => Poll::Pending,
+            },
         }
     }
-}
-
-enum SinkState {
-    Active,
-    Closing,
-    Reading,
 }
 
 pin_project! {
-    /// A sink for `COPY ... FROM STDIN` query data.
+    /// A duplex stream for consuming streaming replication data.
     ///
-    /// The copy *must* be explicitly completed via the `Sink::close` or `finish` methods. If it is
-    /// not, the copy will be aborted.
+    /// Users should ensure that CopyBothDuplex is dropped before attempting to await on a new
+    /// query. This will ensure that the connection returns into normal processing mode.
+    ///
+    /// ```no_run
+    /// use tokio_postgres::Client;
+    ///
+    /// async fn foo(client: &Client) {
+    ///   let duplex_stream = client.copy_both_simple::<&[u8]>("..").await;
+    ///
+    ///   // ⚠️ INCORRECT ⚠️
+    ///   client.query("SELECT 1", &[]).await; // hangs forever
+    ///
+    ///   // duplex_stream drop-ed here
+    /// }
+    /// ```
+    ///
+    /// ```no_run
+    /// use tokio_postgres::Client;
+    ///
+    /// async fn foo(client: &Client) {
+    ///   let duplex_stream = client.copy_both_simple::<&[u8]>("..").await;
+    ///
+    ///   // ✅ CORRECT ✅
+    ///   drop(duplex_stream);
+    ///
+    ///   client.query("SELECT 1", &[]).await;
+    /// }
+    /// ```
     pub struct CopyBothDuplex<T> {
         #[pin]
-        sender: mpsc::Sender<CopyBothMessage>,
-        responses: Responses,
+        sink_sender: mpsc::Sender<FrontendMessage>,
+        #[pin]
+        stream_receiver: mpsc::Receiver<Result<Message, Error>>,
         buf: BytesMut,
-        state: SinkState,
         #[pin]
         _p: PhantomPinned,
         _p2: PhantomData<T>,
-    }
-}
-
-impl<T> CopyBothDuplex<T>
-where
-    T: Buf + 'static + Send,
-{
-    pub(crate) fn new(sender: mpsc::Sender<CopyBothMessage>, responses: Responses) -> Self {
-        Self {
-            sender,
-            responses,
-            buf: BytesMut::new(),
-            state: SinkState::Active,
-            _p: PhantomPinned,
-            _p2: PhantomData,
-        }
-    }
-
-    /// A poll-based version of `finish`.
-    pub fn poll_finish(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<u64, Error>> {
-        loop {
-            match self.state {
-                SinkState::Active => {
-                    ready!(self.as_mut().poll_flush(cx))?;
-                    let mut this = self.as_mut().project();
-                    ready!(this.sender.as_mut().poll_ready(cx)).map_err(|_| Error::closed())?;
-                    this.sender
-                        .start_send(CopyBothMessage::Done)
-                        .map_err(|_| Error::closed())?;
-                    *this.state = SinkState::Closing;
-                }
-                SinkState::Closing => {
-                    let this = self.as_mut().project();
-                    ready!(this.sender.poll_close(cx)).map_err(|_| Error::closed())?;
-                    *this.state = SinkState::Reading;
-                }
-                SinkState::Reading => {
-                    let this = self.as_mut().project();
-                    match ready!(this.responses.poll_next(cx))? {
-                        Message::CommandComplete(body) => {
-                            let rows = body
-                                .tag()
-                                .map_err(Error::parse)?
-                                .rsplit(' ')
-                                .next()
-                                .unwrap()
-                                .parse()
-                                .unwrap_or(0);
-                            return Poll::Ready(Ok(rows));
-                        }
-                        _ => return Poll::Ready(Err(Error::unexpected_message())),
-                    }
-                }
-            }
-        }
-    }
-
-    /// Completes the copy, returning the number of rows inserted.
-    ///
-    /// The `Sink::close` method is equivalent to `finish`, except that it does not return the
-    /// number of rows.
-    pub async fn finish(mut self: Pin<&mut Self>) -> Result<u64, Error> {
-        future::poll_fn(|cx| self.as_mut().poll_finish(cx)).await
     }
 }
 
@@ -151,13 +254,12 @@ impl<T> Stream for CopyBothDuplex<T> {
     type Item = Result<Bytes, Error>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.project();
-
-        match ready!(this.responses.poll_next(cx)?) {
-            Message::CopyData(body) => Poll::Ready(Some(Ok(body.into_bytes()))),
-            Message::CopyDone => Poll::Ready(None),
-            _ => Poll::Ready(Some(Err(Error::unexpected_message()))),
-        }
+        Poll::Ready(match ready!(self.project().stream_receiver.poll_next(cx)) {
+            Some(Ok(Message::CopyData(body))) => Some(Ok(body.into_bytes())),
+            Some(Ok(_)) => Some(Err(Error::unexpected_message())),
+            Some(Err(err)) => Some(Err(err)),
+            None => None,
+        })
     }
 }
 
@@ -169,7 +271,7 @@ where
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         self.project()
-            .sender
+            .sink_sender
             .poll_ready(cx)
             .map_err(|_| Error::closed())
     }
@@ -193,8 +295,8 @@ where
         };
 
         let data = CopyData::new(data).map_err(Error::encode)?;
-        this.sender
-            .start_send(CopyBothMessage::Message(FrontendMessage::CopyData(data)))
+        this.sink_sender
+            .start_send(FrontendMessage::CopyData(data))
             .map_err(|_| Error::closed())
     }
 
@@ -202,20 +304,23 @@ where
         let mut this = self.project();
 
         if !this.buf.is_empty() {
-            ready!(this.sender.as_mut().poll_ready(cx)).map_err(|_| Error::closed())?;
+            ready!(this.sink_sender.as_mut().poll_ready(cx)).map_err(|_| Error::closed())?;
             let data: Box<dyn Buf + Send> = Box::new(this.buf.split().freeze());
             let data = CopyData::new(data).map_err(Error::encode)?;
-            this.sender
+            this.sink_sender
                 .as_mut()
-                .start_send(CopyBothMessage::Message(FrontendMessage::CopyData(data)))
+                .start_send(FrontendMessage::CopyData(data))
                 .map_err(|_| Error::closed())?;
         }
 
-        this.sender.poll_flush(cx).map_err(|_| Error::closed())
+        this.sink_sender.poll_flush(cx).map_err(|_| Error::closed())
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        self.poll_finish(cx).map_ok(|_| ())
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        ready!(self.as_mut().poll_flush(cx))?;
+        let mut this = self.as_mut().project();
+        this.sink_sender.disconnect();
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -230,19 +335,24 @@ where
 
     let buf = simple_query::encode(client, query)?;
 
-    let (mut sender, receiver) = mpsc::channel(1);
-    let receiver = CopyBothReceiver::new(receiver);
-    let mut responses = client.send(RequestMessages::CopyBoth(receiver))?;
+    let mut handles = client.start_copy_both()?;
 
-    sender
-        .send(CopyBothMessage::Message(FrontendMessage::Raw(buf)))
+    handles
+        .sink_sender
+        .send(FrontendMessage::Raw(buf))
         .await
         .map_err(|_| Error::closed())?;
 
-    match responses.next().await? {
-        Message::CopyBothResponse(_) => {}
+    match handles.stream_receiver.next().await.transpose()? {
+        Some(Message::CopyBothResponse(_)) => {}
         _ => return Err(Error::unexpected_message()),
     }
 
-    Ok(CopyBothDuplex::new(sender, responses))
+    Ok(CopyBothDuplex {
+        stream_receiver: handles.stream_receiver,
+        sink_sender: handles.sink_sender,
+        buf: BytesMut::new(),
+        _p: PhantomPinned,
+        _p2: PhantomData,
+    })
 }

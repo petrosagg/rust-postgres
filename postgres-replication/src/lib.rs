@@ -1,15 +1,18 @@
 //! Utilities for working with the PostgreSQL replication copy both format.
 
-use crate::copy_both::CopyBothDuplex;
-use crate::Error;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::{ready, SinkExt, Stream};
 use pin_project_lite::pin_project;
-use postgres_protocol::message::backend::LogicalReplicationMessage;
-use postgres_protocol::message::backend::ReplicationMessage;
 use postgres_types::PgLsn;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use tokio_postgres::CopyBothDuplex;
+use tokio_postgres::Error;
+
+pub mod protocol;
+
+use crate::protocol::{LogicalReplicationMessage, ReplicationMessage};
 
 const STANDBY_STATUS_UPDATE_TAG: u8 = b'r';
 const HOT_STANDBY_FEEDBACK_TAG: u8 = b'h';
@@ -165,7 +168,6 @@ impl Stream for LogicalReplicationStream {
             Some(Ok(ReplicationMessage::PrimaryKeepAlive(body))) => {
                 Poll::Ready(Some(Ok(ReplicationMessage::PrimaryKeepAlive(body))))
             }
-            Some(Ok(_)) => Poll::Ready(Some(Err(Error::unexpected_message()))),
             Some(Err(err)) => Poll::Ready(Some(Err(err))),
             None => Poll::Ready(None),
         }

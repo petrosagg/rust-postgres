@@ -1,0 +1,31 @@
+[package]
+name = "postgres-replication"
+version = "0.6.7"
+authors = ["Petros Angelatos <petrosagg@gmail.com>"]
+edition = "2018"
+description = "Protocol definitions for the Postgres logical replication protocol"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/sfackler/rust-postgres"
+readme = "../README.md"
+
+[features]
+default = []
+
+[dependencies]
+bytes = "1.0"
+memchr = "2.0"
+byteorder = "1.0"
+postgres-protocol = { version = "0.6.7", path = "../postgres-protocol" }
+postgres-types = { version = "0.2.7", path = "../postgres-types" }
+tokio-postgres = { version = "0.7.11", path = "../tokio-postgres", features = ["runtime"] }
+futures-util = { version = "0.3", features = ["sink"] }
+pin-project-lite = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = [
+    "macros",
+    "net",
+    "rt",
+    "rt-multi-thread",
+    "time",
+] }

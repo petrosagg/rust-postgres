@@ -1,7 +1,7 @@
 use crate::codec::{BackendMessages, FrontendMessage};
 use crate::config::SslMode;
 use crate::connection::{Request, RequestMessages};
-use crate::copy_both::CopyBothDuplex;
+use crate::copy_both::{CopyBothDuplex, CopyBothReceiver};
 use crate::copy_out::CopyOutStream;
 #[cfg(feature = "runtime")]
 use crate::keepalive::KeepaliveConfig;
@@ -21,9 +21,9 @@ use crate::{
 use bytes::{Buf, BytesMut};
 use fallible_iterator::FallibleIterator;
 use futures_channel::mpsc;
-use futures_util::{future, pin_mut, ready, StreamExt, TryStreamExt};
+use futures_util::{future, pin_mut, ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
-use postgres_protocol::message::{backend::Message, frontend};
+use postgres_protocol::message::backend::Message;
 use postgres_types::BorrowToSql;
 use std::collections::HashMap;
 use std::fmt;
@@ -31,6 +31,7 @@ use std::fmt;
 use std::net::IpAddr;
 #[cfg(feature = "runtime")]
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 #[cfg(feature = "runtime")]
@@ -40,6 +41,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub struct Responses {
     receiver: mpsc::Receiver<BackendMessages>,
     cur: BackendMessages,
+}
+
+pub struct CopyBothHandles {
+    pub(crate) stream_receiver: mpsc::Receiver<Result<Message, Error>>,
+    pub(crate) sink_sender: mpsc::Sender<FrontendMessage>,
 }
 
 impl Responses {
@@ -60,6 +66,17 @@ impl Responses {
 
     pub async fn next(&mut self) -> Result<Message, Error> {
         future::poll_fn(|cx| self.poll_next(cx)).await
+    }
+}
+
+impl Stream for Responses {
+    type Item = Result<Message, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match ready!((*self).poll_next(cx)) {
+            Err(err) if err.is_closed() => Poll::Ready(None),
+            msg => Poll::Ready(Some(msg)),
+        }
     }
 }
 
@@ -102,6 +119,32 @@ impl InnerClient {
         Ok(Responses {
             receiver,
             cur: BackendMessages::empty(),
+        })
+    }
+
+    pub fn start_copy_both(&self) -> Result<CopyBothHandles, Error> {
+        let (sender, receiver) = mpsc::channel(1);
+        let (stream_sender, stream_receiver) = mpsc::channel(0);
+        let (sink_sender, sink_receiver) = mpsc::channel(0);
+
+        let responses = Responses {
+            receiver,
+            cur: BackendMessages::empty(),
+        };
+        let messages = RequestMessages::CopyBoth(CopyBothReceiver::new(
+            responses,
+            sink_receiver,
+            stream_sender,
+        ));
+
+        let request = Request { messages, sender };
+        self.sender
+            .unbounded_send(request)
+            .map_err(|_| Error::closed())?;
+
+        Ok(CopyBothHandles {
+            stream_receiver,
+            sink_sender,
         })
     }
 
@@ -276,19 +319,9 @@ impl Client {
     where
         T: ?Sized + ToStatement,
     {
-        let stream = self.query_raw(statement, slice_iter(params)).await?;
-        pin_mut!(stream);
-
-        let row = match stream.try_next().await? {
-            Some(row) => row,
-            None => return Err(Error::row_count()),
-        };
-
-        if stream.try_next().await?.is_some() {
-            return Err(Error::row_count());
-        }
-
-        Ok(row)
+        self.query_opt(statement, params)
+            .await
+            .and_then(|res| res.ok_or_else(Error::row_count))
     }
 
     /// Executes a statements which returns zero or one rows, returning it.
@@ -312,16 +345,22 @@ impl Client {
         let stream = self.query_raw(statement, slice_iter(params)).await?;
         pin_mut!(stream);
 
-        let row = match stream.try_next().await? {
-            Some(row) => row,
-            None => return Ok(None),
-        };
+        let mut first = None;
 
-        if stream.try_next().await?.is_some() {
-            return Err(Error::row_count());
+        // Originally this was two calls to `try_next().await?`,
+        // once for the first element, and second to error if more than one.
+        //
+        // However, this new form with only one .await in a loop generates
+        // slightly smaller codegen/stack usage for the resulting future.
+        while let Some(row) = stream.try_next().await? {
+            if first.is_some() {
+                return Err(Error::row_count());
+            }
+
+            first = Some(row);
         }
 
-        Ok(Some(row))
+        Ok(first)
     }
 
     /// The maximally flexible version of [`query`].
@@ -339,7 +378,6 @@ impl Client {
     ///
     /// ```no_run
     /// # async fn async_main(client: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
-    /// use tokio_postgres::types::ToSql;
     /// use futures_util::{pin_mut, TryStreamExt};
     ///
     /// let params: Vec<String> = vec![
@@ -368,6 +406,70 @@ impl Client {
     {
         let statement = statement.__convert().into_statement(self).await?;
         query::query(&self.inner, statement, params).await
+    }
+
+    /// Like `query`, but requires the types of query parameters to be explicitly specified.
+    ///
+    /// Compared to `query`, this method allows performing queries without three round trips (for
+    /// prepare, execute, and close) by requiring the caller to specify parameter values along with
+    /// their Postgres type. Thus, this is suitable in environments where prepared statements aren't
+    /// supported (such as Cloudflare Workers with Hyperdrive).
+    ///
+    /// A statement may contain parameters, specified by `$n`, where `n` is the index of the
+    /// parameter of the list provided, 1-indexed.
+    pub async fn query_typed(
+        &self,
+        query: &str,
+        params: &[(&(dyn ToSql + Sync), Type)],
+    ) -> Result<Vec<Row>, Error> {
+        self.query_typed_raw(query, params.iter().map(|(v, t)| (*v, t.clone())))
+            .await?
+            .try_collect()
+            .await
+    }
+
+    /// The maximally flexible version of [`query_typed`].
+    ///
+    /// Compared to `query`, this method allows performing queries without three round trips (for
+    /// prepare, execute, and close) by requiring the caller to specify parameter values along with
+    /// their Postgres type. Thus, this is suitable in environments where prepared statements aren't
+    /// supported (such as Cloudflare Workers with Hyperdrive).
+    ///
+    /// A statement may contain parameters, specified by `$n`, where `n` is the index of the
+    /// parameter of the list provided, 1-indexed.
+    ///
+    /// [`query_typed`]: #method.query_typed
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn async_main(client: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
+    /// use futures_util::{pin_mut, TryStreamExt};
+    /// use tokio_postgres::types::Type;
+    ///
+    /// let params: Vec<(String, Type)> = vec![
+    ///     ("first param".into(), Type::TEXT),
+    ///     ("second param".into(), Type::TEXT),
+    /// ];
+    /// let mut it = client.query_typed_raw(
+    ///     "SELECT foo FROM bar WHERE biz = $1 AND baz = $2",
+    ///     params,
+    /// ).await?;
+    ///
+    /// pin_mut!(it);
+    /// while let Some(row) = it.try_next().await? {
+    ///     let foo: i32 = row.get("foo");
+    ///     println!("foo: {}", foo);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn query_typed_raw<P, I>(&self, query: &str, params: I) -> Result<RowStream, Error>
+    where
+        P: BorrowToSql,
+        I: IntoIterator<Item = (P, Type)>,
+    {
+        query::query_typed(&self.inner, query, params).await
     }
 
     /// Executes a statement, returning the number of rows modified.
@@ -497,43 +599,7 @@ impl Client {
     ///
     /// The transaction will roll back by default - use the `commit` method to commit it.
     pub async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
-        struct RollbackIfNotDone<'me> {
-            client: &'me Client,
-            done: bool,
-        }
-
-        impl<'a> Drop for RollbackIfNotDone<'a> {
-            fn drop(&mut self) {
-                if self.done {
-                    return;
-                }
-
-                let buf = self.client.inner().with_buf(|buf| {
-                    frontend::query("ROLLBACK", buf).unwrap();
-                    buf.split().freeze()
-                });
-                let _ = self
-                    .client
-                    .inner()
-                    .send(RequestMessages::Single(FrontendMessage::Raw(buf)));
-            }
-        }
-
-        // This is done, as `Future` created by this method can be dropped after
-        // `RequestMessages` is synchronously send to the `Connection` by
-        // `batch_execute()`, but before `Responses` is asynchronously polled to
-        // completion. In that case `Transaction` won't be created and thus
-        // won't be rolled back.
-        {
-            let mut cleaner = RollbackIfNotDone {
-                client: self,
-                done: false,
-            };
-            self.batch_execute("BEGIN").await?;
-            cleaner.done = true;
-        }
-
-        Ok(Transaction::new(self))
+        self.build_transaction().start().await
     }
 
     /// Returns a builder for a transaction with custom settings.

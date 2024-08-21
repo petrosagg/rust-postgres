@@ -17,8 +17,6 @@ use bytes::BytesMut;
 mod bit_vec_06;
 #[cfg(feature = "with-chrono-0_4")]
 mod chrono_04;
-#[cfg(feature = "with-eui48-0_4")]
-mod eui48_04;
 #[cfg(feature = "with-eui48-1")]
 mod eui48_1;
 #[cfg(feature = "with-geo-types-0_6")]
@@ -736,6 +734,28 @@ async fn ltxtquery_any() {
             ),
             (None, "NULL"),
         ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn oidvector() {
+    test_type(
+        "oidvector",
+        // NB: postgres does not support empty oidarrays! All empty arrays are normalized to zero dimensions, but the
+        // oidvectorrecv function requires exactly one dimension.
+        &[(Some(vec![0u32, 1, 2]), "ARRAY[0,1,2]"), (None, "NULL")],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn int2vector() {
+    test_type(
+        "int2vector",
+        // NB: postgres does not support empty int2vectors! All empty arrays are normalized to zero dimensions, but the
+        // oidvectorrecv function requires exactly one dimension.
+        &[(Some(vec![0i16, 1, 2]), "ARRAY[0,1,2]"), (None, "NULL")],
     )
     .await;
 }

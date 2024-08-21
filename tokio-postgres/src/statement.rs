@@ -3,10 +3,7 @@ use crate::codec::FrontendMessage;
 use crate::connection::RequestMessages;
 use crate::types::Type;
 use postgres_protocol::message::frontend;
-use std::{
-    fmt,
-    sync::{Arc, Weak},
-};
+use std::sync::{Arc, Weak};
 
 struct StatementInner {
     client: Weak<InnerClient>,
@@ -17,6 +14,10 @@ struct StatementInner {
 
 impl Drop for StatementInner {
     fn drop(&mut self) {
+        if self.name.is_empty() {
+            // Unnamed statements don't need to be closed
+            return;
+        }
         if let Some(client) = self.client.upgrade() {
             let buf = client.with_buf(|buf| {
                 frontend::close(b'S', &self.name, buf).unwrap();
@@ -49,6 +50,15 @@ impl Statement {
         }))
     }
 
+    pub(crate) fn unnamed(params: Vec<Type>, columns: Vec<Column>) -> Statement {
+        Statement(Arc::new(StatementInner {
+            client: Weak::new(),
+            name: String::new(),
+            params,
+            columns,
+        }))
+    }
+
     pub(crate) fn name(&self) -> &str {
         &self.0.name
     }
@@ -64,33 +74,43 @@ impl Statement {
     }
 }
 
+impl std::fmt::Debug for Statement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.debug_struct("Statement")
+            .field("name", &self.0.name)
+            .field("params", &self.0.params)
+            .field("columns", &self.0.columns)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Information about a column of a query.
+#[derive(Debug)]
 pub struct Column {
-    name: String,
-    type_: Type,
+    pub(crate) name: String,
+    pub(crate) table_oid: Option<u32>,
+    pub(crate) column_id: Option<i16>,
+    pub(crate) r#type: Type,
 }
 
 impl Column {
-    pub(crate) fn new(name: String, type_: Type) -> Column {
-        Column { name, type_ }
-    }
-
     /// Returns the name of the column.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Returns the OID of the underlying database table.
+    pub fn table_oid(&self) -> Option<u32> {
+        self.table_oid
+    }
+
+    /// Return the column ID within the underlying database table.
+    pub fn column_id(&self) -> Option<i16> {
+        self.column_id
+    }
+
     /// Returns the type of the column.
     pub fn type_(&self) -> &Type {
-        &self.type_
-    }
-}
-
-impl fmt::Debug for Column {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt.debug_struct("Column")
-            .field("name", &self.name)
-            .field("type", &self.type_)
-            .finish()
+        &self.r#type
     }
 }

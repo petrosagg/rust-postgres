@@ -3,6 +3,7 @@
 #[cfg(feature = "runtime")]
 use crate::connect::connect;
 use crate::connect_raw::connect_raw;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::keepalive::KeepaliveConfig;
 #[cfg(feature = "runtime")]
 use crate::tls::MakeTlsConnect;
@@ -19,6 +20,7 @@ use std::ops::Deref;
 use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::str;
 use std::str::FromStr;
@@ -34,6 +36,8 @@ pub enum TargetSessionAttrs {
     Any,
     /// The session must allow writes.
     ReadWrite,
+    /// The session allow only reads.
+    ReadOnly,
 }
 
 /// TLS configuration.
@@ -65,16 +69,6 @@ pub enum ChannelBinding {
     Require,
 }
 
-/// Replication mode configuration.
-#[derive(Debug, Copy, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum ReplicationMode {
-    /// Physical replication.
-    Physical,
-    /// Logical replication.
-    Logical,
-}
-
 /// Load balancing configuration.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -83,6 +77,21 @@ pub enum LoadBalanceHosts {
     Disable,
     /// Make connection attempts to hosts in a random order.
     Random,
+}
+
+/// Replication mode configuration.
+///
+/// It is recommended that you use a PostgreSQL server patch version
+/// of at least: 14.0, 13.2, 12.6, 11.11, 10.16, 9.6.21, or
+/// 9.5.25. Earlier patch levels have a bug that doesn't properly
+/// handle pipelined requests after streaming has stopped.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReplicationMode {
+    /// Physical replication.
+    Physical,
+    /// Logical replication.
+    Logical,
 }
 
 /// A host specification.
@@ -108,7 +117,7 @@ pub enum Host {
 ///
 /// ## Keys
 ///
-/// * `user` - The username to authenticate with. Required.
+/// * `user` - The username to authenticate with. Defaults to the user executing this process.
 /// * `password` - The password to authenticate with.
 /// * `dbname` - The name of the database to connect to. Defaults to the username.
 /// * `options` - Command line options used to configure the server.
@@ -210,7 +219,7 @@ pub enum Host {
 /// ```not_rust
 /// postgresql:///mydb?user=user&host=/var/lib/postgresql
 /// ```
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     pub(crate) user: Option<String>,
     pub(crate) password: Option<Vec<u8>>,
@@ -227,11 +236,12 @@ pub struct Config {
     pub(crate) connect_timeout: Option<Duration>,
     pub(crate) tcp_user_timeout: Option<Duration>,
     pub(crate) keepalives: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) keepalive_config: KeepaliveConfig,
     pub(crate) target_session_attrs: TargetSessionAttrs,
     pub(crate) channel_binding: ChannelBinding,
-    pub(crate) replication_mode: Option<ReplicationMode>,
     pub(crate) load_balance_hosts: LoadBalanceHosts,
+    pub(crate) replication_mode: Option<ReplicationMode>,
 }
 
 impl Default for Config {
@@ -243,11 +253,6 @@ impl Default for Config {
 impl Config {
     /// Creates a new configuration.
     pub fn new() -> Config {
-        let keepalive_config = KeepaliveConfig {
-            idle: Duration::from_secs(2 * 60 * 60),
-            interval: None,
-            retries: None,
-        };
         Config {
             user: None,
             password: None,
@@ -264,19 +269,24 @@ impl Config {
             connect_timeout: None,
             tcp_user_timeout: None,
             keepalives: true,
-            keepalive_config,
+            #[cfg(not(target_arch = "wasm32"))]
+            keepalive_config: KeepaliveConfig {
+                idle: Duration::from_secs(2 * 60 * 60),
+                interval: None,
+                retries: None,
+            },
             target_session_attrs: TargetSessionAttrs::Any,
             channel_binding: ChannelBinding::Prefer,
-            replication_mode: None,
             load_balance_hosts: LoadBalanceHosts::Disable,
+            replication_mode: None,
         }
     }
 
     /// Sets the user to authenticate with.
     ///
-    /// Required.
-    pub fn user(&mut self, user: &str) -> &mut Config {
-        self.user = Some(user.to_string());
+    /// Defaults to the user executing this process.
+    pub fn user(&mut self, user: impl Into<String>) -> &mut Config {
+        self.user = Some(user.into());
         self
     }
 
@@ -304,8 +314,8 @@ impl Config {
     /// Sets the name of the database to connect to.
     ///
     /// Defaults to the user.
-    pub fn dbname(&mut self, dbname: &str) -> &mut Config {
-        self.dbname = Some(dbname.to_string());
+    pub fn dbname(&mut self, dbname: impl Into<String>) -> &mut Config {
+        self.dbname = Some(dbname.into());
         self
     }
 
@@ -316,8 +326,8 @@ impl Config {
     }
 
     /// Sets command line options used to configure the server.
-    pub fn options(&mut self, options: &str) -> &mut Config {
-        self.options = Some(options.to_string());
+    pub fn options(&mut self, options: impl Into<String>) -> &mut Config {
+        self.options = Some(options.into());
         self
     }
 
@@ -328,8 +338,8 @@ impl Config {
     }
 
     /// Sets the value of the `application_name` runtime parameter.
-    pub fn application_name(&mut self, application_name: &str) -> &mut Config {
-        self.application_name = Some(application_name.to_string());
+    pub fn application_name(&mut self, application_name: impl Into<String>) -> &mut Config {
+        self.application_name = Some(application_name.into());
         self
     }
 
@@ -396,7 +406,9 @@ impl Config {
     /// Multiple hosts can be specified by calling this method multiple times, and each will be tried in order. On Unix
     /// systems, a host starting with a `/` is interpreted as a path to a directory containing Unix domain sockets.
     /// There must be either no hosts, or the same number of hosts as hostaddrs.
-    pub fn host(&mut self, host: &str) -> &mut Config {
+    pub fn host(&mut self, host: impl Into<String>) -> &mut Config {
+        let host = host.into();
+
         #[cfg(unix)]
         {
             if host.starts_with('/') {
@@ -404,7 +416,7 @@ impl Config {
             }
         }
 
-        self.host.push(Host::Tcp(host.to_string()));
+        self.host.push(Host::Tcp(host));
         self
     }
 
@@ -413,21 +425,9 @@ impl Config {
         &self.host
     }
 
-    /// Gets a mutable view of the hosts that have been added to the
-    /// configuration with `host`.
-    pub fn get_hosts_mut(&mut self) -> &mut [Host] {
-        &mut self.host
-    }
-
     /// Gets the hostaddrs that have been added to the configuration with `hostaddr`.
     pub fn get_hostaddrs(&self) -> &[IpAddr] {
         self.hostaddr.deref()
-    }
-
-    /// Gets a mutable view of the hostaddrs that have been added to the
-    /// configuration with `hostaddr`.
-    pub fn get_hostaddrs_mut(&mut self) -> &mut [IpAddr] {
-        &mut self.hostaddr
     }
 
     /// Adds a Unix socket host to the configuration.
@@ -513,6 +513,7 @@ impl Config {
     /// Sets the amount of idle time before a keepalive packet is sent on the connection.
     ///
     /// This is ignored for Unix domain sockets, or if the `keepalives` option is disabled. Defaults to 2 hours.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn keepalives_idle(&mut self, keepalives_idle: Duration) -> &mut Config {
         self.keepalive_config.idle = keepalives_idle;
         self
@@ -520,6 +521,7 @@ impl Config {
 
     /// Gets the configured amount of idle time before a keepalive packet will
     /// be sent on the connection.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn get_keepalives_idle(&self) -> Duration {
         self.keepalive_config.idle
     }
@@ -528,12 +530,14 @@ impl Config {
     /// On Windows, this sets the value of the tcp_keepalive struct’s keepaliveinterval field.
     ///
     /// This is ignored for Unix domain sockets, or if the `keepalives` option is disabled.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn keepalives_interval(&mut self, keepalives_interval: Duration) -> &mut Config {
         self.keepalive_config.interval = Some(keepalives_interval);
         self
     }
 
     /// Gets the time interval between TCP keepalive probes.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn get_keepalives_interval(&self) -> Option<Duration> {
         self.keepalive_config.interval
     }
@@ -541,12 +545,14 @@ impl Config {
     /// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection.
     ///
     /// This is ignored for Unix domain sockets, or if the `keepalives` option is disabled.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn keepalives_retries(&mut self, keepalives_retries: u32) -> &mut Config {
         self.keepalive_config.retries = Some(keepalives_retries);
         self
     }
 
     /// Gets the maximum number of TCP keepalive probes that will be sent before dropping a connection.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn get_keepalives_retries(&self) -> Option<u32> {
         self.keepalive_config.retries
     }
@@ -581,17 +587,6 @@ impl Config {
         self.channel_binding
     }
 
-    /// Set replication mode.
-    pub fn replication_mode(&mut self, replication_mode: ReplicationMode) -> &mut Config {
-        self.replication_mode = Some(replication_mode);
-        self
-    }
-
-    /// Get replication mode.
-    pub fn get_replication_mode(&self) -> Option<ReplicationMode> {
-        self.replication_mode
-    }
-
     /// Sets the host load balancing behavior.
     ///
     /// Defaults to `disable`.
@@ -603,6 +598,22 @@ impl Config {
     /// Gets the host load balancing behavior.
     pub fn get_load_balance_hosts(&self) -> LoadBalanceHosts {
         self.load_balance_hosts
+    }
+
+    /// Set replication mode.
+    ///
+    /// It is recommended that you use a PostgreSQL server patch version
+    /// of at least: 14.0, 13.2, 12.6, 11.11, 10.16, 9.6.21, or
+    /// 9.5.25. Earlier patch levels have a bug that doesn't properly
+    /// handle pipelined requests after streaming has stopped.
+    pub fn replication_mode(&mut self, replication_mode: ReplicationMode) -> &mut Config {
+        self.replication_mode = Some(replication_mode);
+        self
+    }
+
+    /// Get replication mode.
+    pub fn get_replication_mode(&self) -> Option<ReplicationMode> {
+        self.replication_mode
     }
 
     fn param(&mut self, key: &str, value: &str) -> Result<(), Error> {
@@ -706,12 +717,14 @@ impl Config {
                     self.tcp_user_timeout(Duration::from_secs(timeout as u64));
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
             "keepalives" => {
                 let keepalives = value
                     .parse::<u64>()
                     .map_err(|_| Error::config_parse(Box::new(InvalidValue("keepalives"))))?;
                 self.keepalives(keepalives != 0);
             }
+            #[cfg(not(target_arch = "wasm32"))]
             "keepalives_idle" => {
                 let keepalives_idle = value
                     .parse::<i64>()
@@ -720,6 +733,7 @@ impl Config {
                     self.keepalives_idle(Duration::from_secs(keepalives_idle as u64));
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
             "keepalives_interval" => {
                 let keepalives_interval = value.parse::<i64>().map_err(|_| {
                     Error::config_parse(Box::new(InvalidValue("keepalives_interval")))
@@ -728,6 +742,7 @@ impl Config {
                     self.keepalives_interval(Duration::from_secs(keepalives_interval as u64));
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
             "keepalives_retries" => {
                 let keepalives_retries = value.parse::<u32>().map_err(|_| {
                     Error::config_parse(Box::new(InvalidValue("keepalives_retries")))
@@ -738,6 +753,7 @@ impl Config {
                 let target_session_attrs = match value {
                     "any" => TargetSessionAttrs::Any,
                     "read-write" => TargetSessionAttrs::ReadWrite,
+                    "read-only" => TargetSessionAttrs::ReadOnly,
                     _ => {
                         return Err(Error::config_parse(Box::new(InvalidValue(
                             "target_session_attrs",
@@ -759,17 +775,6 @@ impl Config {
                 };
                 self.channel_binding(channel_binding);
             }
-            "replication" => {
-                let mode = match value {
-                    "off" => None,
-                    "true" => Some(ReplicationMode::Physical),
-                    "database" => Some(ReplicationMode::Logical),
-                    _ => return Err(Error::config_parse(Box::new(InvalidValue("replication")))),
-                };
-                if let Some(mode) = mode {
-                    self.replication_mode(mode);
-                }
-            }
             "load_balance_hosts" => {
                 let load_balance_hosts = match value {
                     "disable" => LoadBalanceHosts::Disable,
@@ -781,6 +786,17 @@ impl Config {
                     }
                 };
                 self.load_balance_hosts(load_balance_hosts);
+            }
+            "replication" => {
+                let mode = match value {
+                    "off" => None,
+                    "true" => Some(ReplicationMode::Physical),
+                    "database" => Some(ReplicationMode::Logical),
+                    _ => return Err(Error::config_parse(Box::new(InvalidValue("replication")))),
+                };
+                if let Some(mode) = mode {
+                    self.replication_mode(mode);
+                }
             }
             key => {
                 return Err(Error::config_parse(Box::new(UnknownOption(
@@ -840,7 +856,8 @@ impl fmt::Debug for Config {
             }
         }
 
-        f.debug_struct("Config")
+        let mut config_dbg = &mut f.debug_struct("Config");
+        config_dbg = config_dbg
             .field("user", &self.user)
             .field("password", &self.password.as_ref().map(|_| Redaction {}))
             .field("dbname", &self.dbname)
@@ -855,10 +872,17 @@ impl fmt::Debug for Config {
             .field("port", &self.port)
             .field("connect_timeout", &self.connect_timeout)
             .field("tcp_user_timeout", &self.tcp_user_timeout)
-            .field("keepalives", &self.keepalives)
-            .field("keepalives_idle", &self.keepalive_config.idle)
-            .field("keepalives_interval", &self.keepalive_config.interval)
-            .field("keepalives_retries", &self.keepalive_config.retries)
+            .field("keepalives", &self.keepalives);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            config_dbg = config_dbg
+                .field("keepalives_idle", &self.keepalive_config.idle)
+                .field("keepalives_interval", &self.keepalive_config.interval)
+                .field("keepalives_retries", &self.keepalive_config.retries);
+        }
+
+        config_dbg
             .field("target_session_attrs", &self.target_session_attrs)
             .field("channel_binding", &self.channel_binding)
             .field("replication", &self.replication_mode)
@@ -1110,7 +1134,7 @@ impl<'a> UrlParser<'a> {
 
         let mut it = creds.splitn(2, ':');
         let user = self.decode(it.next().unwrap())?;
-        self.config.user(&user);
+        self.config.user(user);
 
         if let Some(password) = it.next() {
             let password = Cow::from(percent_encoding::percent_decode(password.as_bytes()));
@@ -1173,7 +1197,7 @@ impl<'a> UrlParser<'a> {
         };
 
         if !dbname.is_empty() {
-            self.config.dbname(&self.decode(dbname)?);
+            self.config.dbname(self.decode(dbname)?);
         }
 
         Ok(())
