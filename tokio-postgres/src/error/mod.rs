@@ -86,7 +86,7 @@ pub struct DbError {
 }
 
 impl DbError {
-    pub(crate) fn parse(fields: &mut ErrorFields<'_>) -> io::Result<DbError> {
+    pub fn parse(fields: &mut ErrorFields<'_>) -> io::Result<DbError> {
         let mut severity = None;
         let mut parsed_severity = None;
         let mut code = None;
@@ -446,7 +446,7 @@ impl Error {
         Error::new(Kind::Closed, None)
     }
 
-    pub(crate) fn unexpected_message() -> Error {
+    pub fn unexpected_message() -> Error {
         Error::new(Kind::UnexpectedMessage, None)
     }
 
@@ -458,7 +458,7 @@ impl Error {
         }
     }
 
-    pub(crate) fn parse(e: io::Error) -> Error {
+    pub fn parse(e: io::Error) -> Error {
         Error::new(Kind::Parse, Some(Box::new(e)))
     }
 
