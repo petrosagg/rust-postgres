@@ -1,6 +1,8 @@
 use futures_util::{future, StreamExt, TryStreamExt};
 use tokio_postgres::{error::SqlState, Client, SimpleQueryMessage, SimpleQueryRow};
 
+use crate::Cancellable;
+
 async fn q(client: &Client, query: &str) -> Vec<SimpleQueryRow> {
     let msgs = client.simple_query(query).await.unwrap();
 
@@ -122,4 +124,37 @@ async fn copy_both() {
 
     // Ensure we can continue issuing queries
     assert_eq!(q(&client, "SELECT 1").await[0].get(0), Some("1"));
+}
+
+#[tokio::test]
+async fn copy_both_future_cancellation() {
+    let client = crate::connect("user=postgres replication=database").await;
+
+    let slot_query =
+        "CREATE_REPLICATION_SLOT future_cancellation TEMPORARY LOGICAL \"test_decoding\"";
+    let lsn = q(&client, slot_query).await[0]
+        .get("consistent_point")
+        .unwrap()
+        .to_owned();
+
+    let query = format!("START_REPLICATION SLOT future_cancellation LOGICAL {}", lsn);
+    for i in 0.. {
+        let done = {
+            let duplex_stream = client.copy_both_simple::<bytes::Bytes>(&query);
+            let fut = Cancellable {
+                fut: duplex_stream,
+                polls_left: i,
+            };
+            fut.await
+                .map(|res| res.expect("copy_both failed"))
+                .is_some()
+        };
+
+        // Ensure we can continue issuing queries
+        assert_eq!(q(&client, "SELECT 1").await[0].get(0), Some("1"));
+
+        if done {
+            break;
+        }
+    }
 }
